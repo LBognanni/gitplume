@@ -1,4 +1,4 @@
-# gitplume
+# 🪶GitPlume
 
 A fast terminal app for reviewing and staging your Git changes. See what you
 changed, read it as a syntax-highlighted diff with the whole file around it,
@@ -27,7 +27,7 @@ curl -fsSL https://github.com/LBognanni/gitplume/releases/latest/download/instal
 ```
 
 This installs `gitplume` to `~/.local/bin`. Set `GITPLUME_INSTALL_DIR` on `sh`
-to install somewhere else, or `GITPLUME_VERSION` to pick a release tag.
+to install somewhere else.
 
 You need Git and a [Nerd Font](https://www.nerdfonts.com/) in your terminal.
 With a Rust toolchain, you can also install it from crates.io:

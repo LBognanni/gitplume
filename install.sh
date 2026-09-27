@@ -1,8 +1,6 @@
 #!/bin/sh
 # Install gitplume from GitHub Releases:
 #   curl -fsSL https://github.com/LBognanni/gitplume/releases/latest/download/install.sh | sh
-# GITPLUME_VERSION picks a release tag (default: the release this script was
-# downloaded from; latest when run from the repository).
 # GITPLUME_INSTALL_DIR picks the directory (default: ~/.local/bin).
 set -eu
 
@@ -15,6 +13,7 @@ main() {
         *) echo "gitplume: unsupported platform: $(uname -sm)" >&2; exit 1 ;;
     esac
 
+    # The release workflow rewrites this default to each release's own tag.
     version="${GITPLUME_VERSION:-latest}"
     if [ "$version" = latest ]; then
         base=https://github.com/LBognanni/gitplume/releases/latest/download
