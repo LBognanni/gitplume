@@ -6,9 +6,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use common::{FakeGit, Harness, ROOT, state};
 use crossterm::event::KeyCode;
-use gitpane::app::{Action, Event, Job};
-use gitpane::model::{Commit, FileEntry, Side};
-use gitpane::runtime;
+use gitplume::app::{Action, Event, Job};
+use gitplume::model::{Commit, FileEntry, Side};
+use gitplume::runtime;
 
 fn status_job(token: u64) -> Job {
     Job::Status {

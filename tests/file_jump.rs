@@ -2,7 +2,7 @@ mod common;
 
 use common::{Harness, TempDir};
 use crossterm::event::{KeyCode, MouseEventKind};
-use gitpane::app::{Focus, matching_files};
+use gitplume::app::{Focus, matching_files};
 
 fn index(paths: &[&str]) -> Vec<(String, String)> {
     paths

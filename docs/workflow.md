@@ -32,7 +32,7 @@ belong in `docs/milestones.md`; the application's design belongs in
 
 Every coder story dispatch must include these explicit rules:
 
-- **"Do NOT run the gitpane binary interactively or do any smoke test; tests only."** State this negative explicitly.
+- **"Do NOT run the gitplume binary interactively or do any smoke test; tests only."** State this negative explicitly.
 - **"NEVER use `git stash`, `git checkout --`, or `git restore` on any file you did not intentionally edit for
   this task. If something unexpected changes, STOP and report it."** Never self-heal with destructive git
   commands.

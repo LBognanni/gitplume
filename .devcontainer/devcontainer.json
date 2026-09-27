@@ -1,5 +1,5 @@
 {
-  "name": "gitpane-rust",
+  "name": "gitplume-rust",
   "build": { "dockerfile": "Dockerfile" },
   // up.sh passes the MAIN repository root as the workspace folder. Mount it at
   // its host path so worktrees' absolute .git pointers resolve, and open the
@@ -14,7 +14,7 @@
   "appPort": ["127.0.0.1:2222:2222"],
   "mounts": [
     "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind",
-    "source=gitpane-cargo-registry,target=/usr/local/cargo/registry,type=volume"
+    "source=gitplume-cargo-registry,target=/usr/local/cargo/registry,type=volume"
   ],
   "postCreateCommand": "bash .devcontainer/post-create.sh"
 }

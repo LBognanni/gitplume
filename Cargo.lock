@@ -498,7 +498,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitpane"
+name = "gitplume"
 version = "0.1.0"
 dependencies = [
  "crossterm",

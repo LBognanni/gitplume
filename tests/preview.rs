@@ -2,7 +2,7 @@ mod common;
 
 use common::{Harness, TempDir};
 use crossterm::event::KeyCode;
-use gitpane::code_view::scrollbar_click_target;
+use gitplume::code_view::scrollbar_click_target;
 
 #[test]
 fn file_selection_shows_repository_relative_path() {

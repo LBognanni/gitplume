@@ -11,10 +11,10 @@ use std::time::Instant;
 use crossterm::event::{
     Event as Input, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use gitpane::app::{App, Effect, Event, Job};
-use gitpane::git::{GitApi, GitError};
-use gitpane::model::{Commit, CommitFile, DiffEntry, FileEntry, RepoState, Side};
-use gitpane::{runtime, ui};
+use gitplume::app::{App, Effect, Event, Job};
+use gitplume::git::{GitApi, GitError};
+use gitplume::model::{Commit, CommitFile, DiffEntry, FileEntry, RepoState, Side};
+use gitplume::{runtime, ui};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -415,7 +415,7 @@ pub struct TempDir(pub PathBuf);
 
 impl TempDir {
     pub fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("gitpane-{name}-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("gitplume-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         Self(path)

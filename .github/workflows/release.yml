@@ -1,5 +1,6 @@
 # Build binaries and publish them as a GitHub release: a pushed v* tag makes a
 # release, a push to any branch but main makes a beta prerelease for testing.
+# Tags also publish the crate to crates.io.
 name: Release
 
 on:
@@ -21,7 +22,7 @@ jobs:
           - { target: x86_64-apple-darwin, os: macos-latest }
     runs-on: ${{ matrix.os }}
     env:
-      BIN: target/${{ matrix.target }}/release/gitpane
+      BIN: target/${{ matrix.target }}/release/gitplume
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -40,12 +41,12 @@ jobs:
         run: |
           version="$("$BIN" --version)"
           echo "$version"
-          [ "$GITHUB_REF_TYPE" != tag ] || [ "$version" = "gitpane ${GITHUB_REF_NAME#v}" ]
-      - run: tar -czf gitpane-${{ matrix.target }}.tar.gz -C "$(dirname "$BIN")" gitpane -C "$GITHUB_WORKSPACE" LICENSE
+          [ "$GITHUB_REF_TYPE" != tag ] || [ "$version" = "gitplume ${GITHUB_REF_NAME#v}" ]
+      - run: tar -czf gitplume-${{ matrix.target }}.tar.gz -C "$(dirname "$BIN")" gitplume -C "$GITHUB_WORKSPACE" LICENSE
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
-          path: gitpane-${{ matrix.target }}.tar.gz
+          path: gitplume-${{ matrix.target }}.tar.gz
 
   release:
     needs: build
@@ -72,6 +73,23 @@ jobs:
             set -- --prerelease --target "$GITHUB_SHA" --notes "Beta build of $GITHUB_REF_NAME at $GITHUB_SHA."
           fi
           # Each release's installer defaults to that release.
-          sed -i "s/GITPANE_VERSION:-latest/GITPANE_VERSION:-$tag/" install.sh
-          grep -q "GITPANE_VERSION:-$tag" install.sh
+          sed -i "s/GITPLUME_VERSION:-latest/GITPLUME_VERSION:-$tag/" install.sh
+          grep -q "GITPLUME_VERSION:-$tag" install.sh
           gh release create "$tag" dist/*.tar.gz install.sh "$@"
+
+  # Publishes with crates.io Trusted Publishing, so no token is stored here.
+  crates:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

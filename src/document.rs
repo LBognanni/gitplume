@@ -521,7 +521,7 @@ index 1111111..2222222 100644
 
     fn temp_file(name: &str, contents: &[u8]) -> TempFile {
         let dir =
-            std::env::temp_dir().join(format!("gitpane-document-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("gitplume-document-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);

@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
-use gitpane::app::App;
-use gitpane::git::{CliGit, SystemRunner};
-use gitpane::runtime;
+use gitplume::app::App;
+use gitplume::git::{CliGit, SystemRunner};
+use gitplume::runtime;
 
 fn main() -> io::Result<ExitCode> {
     if std::env::args().nth(1).as_deref() == Some("--version") {
-        println!("gitpane {}", env!("CARGO_PKG_VERSION"));
+        println!("gitplume {}", env!("CARGO_PKG_VERSION"));
         return Ok(ExitCode::SUCCESS);
     }
     let git = CliGit::new(SystemRunner);

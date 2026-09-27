@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use common::{FakeGit, Harness, ROOT, failure, state};
 use crossterm::event::KeyCode;
-use gitpane::app::{Action, Focus, Job};
-use gitpane::model::{FileEntry, RepoState, Side};
-use gitpane::runtime;
+use gitplume::app::{Action, Focus, Job};
+use gitplume::model::{FileEntry, RepoState, Side};
+use gitplume::runtime;
 use ratatui::style::Modifier;
 
 const SIDEBAR: usize = 30;

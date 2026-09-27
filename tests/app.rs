@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 
 use common::{Harness, ROOT, TempDir, state};
 use crossterm::event::{KeyCode, KeyModifiers};
-use gitpane::app::{App, Effect, Event, Focus, Severity, Tab};
-use gitpane::git::GitError;
-use gitpane::model::{Commit, CommitFile};
-use gitpane::runtime::{self, claim_first_launch, default_marker};
-use gitpane::ui::format_commit_label;
+use gitplume::app::{App, Effect, Event, Focus, Severity, Tab};
+use gitplume::git::GitError;
+use gitplume::model::{Commit, CommitFile};
+use gitplume::runtime::{self, claim_first_launch, default_marker};
+use gitplume::ui::format_commit_label;
 use ratatui::style::Modifier;
 
 /// The label of the bold tab in the tabs row.
@@ -344,9 +344,9 @@ fn claim_first_launch_shows_help_when_marker_parent_is_invalid() {
 }
 
 #[test]
-fn default_marker_lives_in_the_gitpane_state_directory() {
+fn default_marker_lives_in_the_gitplume_state_directory() {
     let marker = default_marker().unwrap();
-    assert!(marker.ends_with("gitpane/shortcuts-shown"), "{marker:?}");
+    assert!(marker.ends_with("gitplume/shortcuts-shown"), "{marker:?}");
 }
 
 #[test]

@@ -1,8 +1,8 @@
-# gitpane design
+# gitplume design
 
 ## The application
 
-gitpane is a terminal app for reviewing and staging working-tree changes. It
+gitplume is a terminal app for reviewing and staging working-tree changes. It
 answers "what did I change, and what do I want in my next commit?" without
 leaving the terminal, and stays fast on large files and large diffs.
 
@@ -58,7 +58,7 @@ through the terminal.
 - **Work is bounded by the viewport.** Only visible rows are built,
   highlighted, and drawn, whether a document has a hundred rows or a hundred
   thousand.
-- **Git is the source of truth.** gitpane runs the `git` CLI, so it respects
+- **Git is the source of truth.** gitplume runs the `git` CLI, so it respects
   the user's configuration, and it never caches repository state beyond what
   is on screen.
 - **It stays in sync on its own.** A file watcher refreshes status and history

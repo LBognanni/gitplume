@@ -2,7 +2,7 @@ mod common;
 
 use common::{Harness, state};
 use crossterm::event::KeyCode;
-use gitpane::app::Focus;
+use gitplume::app::Focus;
 use ratatui::style::Color;
 
 fn harness(width: u16, height: u16) -> Harness {
@@ -78,7 +78,7 @@ fn dragging_a_splitter_across_the_diff_never_selects_text() {
     harness
         .app
         .diff_view
-        .set_document(gitpane::document::diff_document("a.txt", &long_diff()));
+        .set_document(gitplume::document::diff_document("a.txt", &long_diff()));
     harness.draw();
     let (x, y) = sidebar_splitter(&harness);
     harness.mouse_down((x, y));
@@ -153,7 +153,7 @@ fn resizing_keeps_usable_panes_and_scrolling() {
     harness
         .app
         .diff_view
-        .set_document(gitpane::document::diff_document("a.txt", &long_diff()));
+        .set_document(gitplume::document::diff_document("a.txt", &long_diff()));
     let (x, y) = sidebar_splitter(&harness);
     harness.drag((x, y), (x + 5, y));
     let (x, y) = section_splitter(&harness, 0);
@@ -200,7 +200,7 @@ fn resizing_without_a_drag_keeps_usable_panes_and_scrolling() {
     harness
         .app
         .diff_view
-        .set_document(gitpane::document::diff_document("a.txt", &long_diff()));
+        .set_document(gitplume::document::diff_document("a.txt", &long_diff()));
 
     for (width, height) in [(140, 40), (80, 24), (60, 20)] {
         harness.resize(width, height);

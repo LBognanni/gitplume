@@ -2,10 +2,10 @@ mod common;
 
 use common::{Harness, failure, state};
 use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
-use gitpane::app::{Event, Focus, Severity};
-use gitpane::document::diff_document;
-use gitpane::model::{FileEntry, Side};
-use gitpane::watcher::{Invalidation, Watch};
+use gitplume::app::{Event, Focus, Severity};
+use gitplume::document::diff_document;
+use gitplume::model::{FileEntry, Side};
+use gitplume::watcher::{Invalidation, Watch};
 use ratatui::style::Modifier;
 
 /// First column of the diff pane (sidebar plus splitter).

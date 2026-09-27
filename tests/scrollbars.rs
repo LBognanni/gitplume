@@ -3,7 +3,7 @@ mod common;
 
 use common::{Harness, state};
 use crossterm::event::{KeyCode, MouseEventKind};
-use gitpane::model::Commit;
+use gitplume::model::Commit;
 use ratatui::style::{Color, Modifier};
 
 const LONG_ROOT: &str = "/a/very/long/launch/directory/path/that/overflows";

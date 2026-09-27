@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 use common::{Harness, ROOT, failure};
 use crossterm::event::KeyCode;
-use gitpane::app::{Event, Focus, Job, MISSING, Severity};
-use gitpane::model::{Commit, CommitFile, FileEntry, RepoState, Side};
-use gitpane::runtime;
-use gitpane::watcher::{Invalidation, Watch};
+use gitplume::app::{Event, Focus, Job, MISSING, Severity};
+use gitplume::model::{Commit, CommitFile, FileEntry, RepoState, Side};
+use gitplume::runtime;
+use gitplume::watcher::{Invalidation, Watch};
 use ratatui::style::Modifier;
 
 /// Paths whose diffs the fake serves.

@@ -15,7 +15,7 @@ Then connect over SSH with this host `~/.ssh/config` entry. The key is
 generated on the first start.
 
 ```
-Host gitpane-dev
+Host gitplume-dev
   HostName 127.0.0.1
   Port 2222
   User vscode
@@ -54,7 +54,7 @@ Releases are built by `.github/workflows/release.yml`:
   `vX.Y.Z-beta.N` prerelease. Install one with:
 
   ```bash
-  curl -fsSL https://github.com/LBognanni/gitpane/releases/download/<tag>/install.sh | sh
+  curl -fsSL https://github.com/LBognanni/gitplume/releases/download/<tag>/install.sh | sh
   ```
 
 To build the static Linux binary locally, as CI does (the devcontainer has the

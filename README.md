@@ -1,4 +1,4 @@
-# gitpane
+# gitplume
 
 A fast terminal app for reviewing and staging your Git changes. See what you
 changed, read it as a syntax-highlighted diff with the whole file around it,
@@ -23,21 +23,23 @@ and stage or discard it, without leaving the terminal.
 On Linux or macOS:
 
 ```bash
-curl -fsSL https://github.com/LBognanni/gitpane/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/LBognanni/gitplume/releases/latest/download/install.sh | sh
 ```
 
-This installs `gitpane` to `~/.local/bin`. Set `GITPANE_INSTALL_DIR` on `sh`
-to install somewhere else, or `GITPANE_VERSION` to pick a release tag.
+This installs `gitplume` to `~/.local/bin`. Set `GITPLUME_INSTALL_DIR` on `sh`
+to install somewhere else, or `GITPLUME_VERSION` to pick a release tag.
 
 You need Git and a [Nerd Font](https://www.nerdfonts.com/) in your terminal.
-With a Rust toolchain, you can also build it from source:
-`cargo install --locked --git https://github.com/LBognanni/gitpane`.
+With a Rust toolchain, you can also install it from crates.io:
+`cargo install --locked gitplume`.
 
-Upgrading from the Python version? Run `uv tool uninstall gitpane` first.
+gitplume used to be called gitpane. Upgrading? Delete the old `gitpane` binary
+from `~/.local/bin`, or run `uv tool uninstall gitpane` if you had the Python
+version.
 
 ## Usage
 
-Run `gitpane` inside a Git repository.
+Run `gitplume` inside a Git repository.
 
 The **Changes** tab lists staged files, unstaged files, and recent commits.
 Select a file to see its diff, or a commit to see the files it changed. The
@@ -71,7 +73,7 @@ a file to preview it. Press `h` at any time for the keyboard shortcuts.
 
 ## Limitations
 
-gitpane stages whole files only: no hunk or line staging yet. It doesn't
+gitplume stages whole files only: no hunk or line staging yet. It doesn't
 make commits, resolve conflicts, handle renames, or preview binary files. The
 Files tab only refreshes when you press `r`.
 

@@ -17,7 +17,7 @@ use crate::watcher;
 
 /// The platform location of the first-launch marker, if one can be determined.
 pub fn default_marker() -> Option<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "gitpane")?;
+    let dirs = directories::ProjectDirs::from("", "", "gitplume")?;
     let dir = dirs.state_dir().unwrap_or_else(|| dirs.data_local_dir());
     Some(dir.join("shortcuts-shown"))
 }

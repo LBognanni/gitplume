@@ -2,7 +2,7 @@ mod common;
 
 use common::{Harness, state};
 use crossterm::event::KeyCode;
-use gitpane::git::GitError;
+use gitplume::git::GitError;
 use ratatui::style::{Color, Modifier};
 
 const TEXT_FLOOR: f64 = 4.5;
