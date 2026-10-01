@@ -68,8 +68,8 @@ through the terminal.
 - **Git is the source of truth.** gitplume runs the `git` CLI, so it respects
   the user's configuration, and it never caches repository state beyond what
   is on screen.
-- **It stays in sync on its own.** A file watcher refreshes status and history
-  as the repository changes, without disturbing selection, focus, or scroll.
+- **It stays in sync on its own.** A file watcher keeps every tab current as
+  the repository changes, without disturbing selection, focus, or scroll.
 - **Simple over clever.** No widget framework, no async runtime, no plugin or
   configuration system.
 
@@ -227,6 +227,15 @@ These rules keep the screen stable while the repository changes underneath it.
   - no loading states;
   - highlights, checks, and focus are kept by side and path;
   - an equal state changes nothing.
+- **Dirty tabs:** only the active tab refreshes live. An invalidation that
+  reaches an inactive tab just marks it dirty; switching to a dirty tab
+  refreshes it then, the same way it would have refreshed live. This applies
+  uniformly: Changes reads status (and history, and reconciles the open
+  diff) only while it's the active tab; Files (and Find, which searches
+  whatever Files last listed) re-lists files only while one of them is
+  active, keeping the tree's expanded folders, cursor, and scroll, and
+  re-running any active find-in-files search against the fresh list. `r`
+  always forces an immediate refresh regardless of tab or dirtiness.
 - **Open diff:** after a quiet apply, the open working-tree diff reloads only
   if it may have changed, keeping its scroll and change position. An equal
   patch leaves the document untouched. An entry that disappeared shows a

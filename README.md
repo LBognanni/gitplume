@@ -78,8 +78,9 @@ the matching line. Press `h` at any time for the keyboard shortcuts.
 ## Limitations
 
 gitplume stages whole files only: no hunk or line staging yet. It doesn't
-make commits, resolve conflicts, handle renames, or preview binary files. The
-Files tab only refreshes when you press `r`.
+make commits, resolve conflicts, handle renames, or preview binary files. An
+open file preview does not reload if its own file changes underneath it;
+reselect it to see the current content.
 
 ## Contributing
 

@@ -428,6 +428,31 @@ impl FileTree {
         }
     }
 
+    /// Rebuild from a fresh file list, keeping expanded folders (by path)
+    /// and the cursor (by path) so a background refresh doesn't visibly
+    /// disturb the tree.
+    fn rebuild(&mut self, root_name: String, files: &[String]) {
+        let cursor_path = self.cursor.map(|index| self.nodes[index].path.clone());
+        let expanded: std::collections::HashSet<&str> = self
+            .nodes
+            .iter()
+            .filter(|node| node.dir && node.expanded)
+            .map(|node| node.path.as_str())
+            .collect();
+        let mut rebuilt = Self::build(root_name, files);
+        for node in &mut rebuilt.nodes {
+            if node.dir && expanded.contains(node.path.as_str()) {
+                node.expanded = true;
+            }
+        }
+        rebuilt.cursor = cursor_path
+            .and_then(|path| rebuilt.nodes.iter().position(|node| node.path == path))
+            .or(rebuilt.cursor);
+        rebuilt.offset = self.offset;
+        rebuilt.scroll_x = self.scroll_x;
+        *self = rebuilt;
+    }
+
     /// Indices of the visible nodes: those without a collapsed ancestor.
     pub fn rows(&self) -> Vec<usize> {
         let mut rows = Vec::new();
@@ -695,6 +720,12 @@ pub struct App {
     pub files: FileTree,
     pub files_tree_loading: bool,
     files_token: u64,
+    /// A relevant filesystem change arrived while neither Files nor Find
+    /// was active; refreshed the next time either tab becomes active.
+    files_dirty: bool,
+    /// The in-flight `Job::Files` result is a background refresh (no
+    /// loading indicator, tree state preserved) rather than a manual one.
+    files_quiet: bool,
     /// Listed paths paired with their lowercase form, for file jump.
     search_index: Vec<(String, String)>,
     /// First file jump result shown, and how many rows the last render showed.
@@ -764,6 +795,8 @@ impl App {
             files: FileTree::default(),
             files_tree_loading: false,
             files_token: 0,
+            files_dirty: false,
+            files_quiet: false,
             search_index: Vec::new(),
             jump_offset: 0,
             jump_rows: 0,
@@ -804,7 +837,22 @@ impl App {
         }
         self.files_token += 1;
         self.files_tree_loading = true;
+        self.files_quiet = false;
+        self.files_dirty = false;
         self.clear_preview();
+        vec![Effect::Git(Job::Files {
+            cwd: self.cwd.clone(),
+            token: self.files_token,
+        })]
+    }
+
+    /// Reload the Files tree in the background: no loading indicator, the
+    /// file-jump dialog and preview are left alone, and the tree's
+    /// expanded folders, cursor and scroll survive (see `FileTree::rebuild`).
+    fn refresh_files_quiet(&mut self) -> Vec<Effect> {
+        self.files_token += 1;
+        self.files_quiet = true;
+        self.files_dirty = false;
         vec![Effect::Git(Job::Files {
             cwd: self.cwd.clone(),
             token: self.files_token,
@@ -822,15 +870,29 @@ impl App {
 
     fn apply_files(&mut self, files: Vec<String>) -> Vec<Effect> {
         self.files = FileTree::build(self.cwd.display().to_string(), &files);
-        self.search_index = files
+        self.search_index = Self::index_files(files);
+        self.clear_preview();
+        self.search()
+    }
+
+    /// Apply a background file-list refresh: rebuild the tree in place
+    /// (preserving its state) and refresh find-in-files, but leave the
+    /// preview as it is.
+    fn apply_files_quiet(&mut self, files: Vec<String>) -> Vec<Effect> {
+        self.files.rebuild(self.cwd.display().to_string(), &files);
+        self.search_index = Self::index_files(files);
+        self.search()
+    }
+
+    /// Pair each path with its lowercase form, for file jump and find-in-files.
+    fn index_files(files: Vec<String>) -> Vec<(String, String)> {
+        files
             .into_iter()
             .map(|path| {
                 let lower = path.to_lowercase();
                 (path, lower)
             })
-            .collect();
-        self.clear_preview();
-        self.search()
+            .collect()
     }
 
     /// Activate the cursor node: toggle a folder (not the root), or preview a file.
@@ -1410,10 +1472,20 @@ impl App {
             }
             Event::Watch(Watch::Started) => self.watch_started = true,
             Event::Watch(Watch::Changed(invalidation)) => {
+                let mut effects = Vec::new();
+                // `changed_paths` is only ever set alongside `status`.
+                if !invalidation.changed_paths.is_empty() {
+                    if matches!(self.tab, Tab::Files | Tab::Find) {
+                        effects.extend(self.refresh_files_quiet());
+                    } else {
+                        self.files_dirty = true;
+                    }
+                }
                 if invalidation.status {
                     self.merge_pending(invalidation);
-                    return self.start_auto_read();
+                    effects.extend(self.start_auto_read());
                 }
+                return effects;
             }
             Event::Watch(Watch::Stopped) => {
                 let body = if self.watch_started {
@@ -1460,7 +1532,9 @@ impl App {
                     return Vec::new();
                 }
                 self.files_tree_loading = false;
+                let quiet = self.files_quiet;
                 match result {
+                    Ok(files) if quiet => return self.apply_files_quiet(files),
                     Ok(files) => return self.apply_files(files),
                     Err(error) => self.git_error("refresh files", &error),
                 }
@@ -1528,9 +1602,11 @@ impl App {
         }
     }
 
-    /// Start an automatic read of the pending invalidation unless one is in flight.
+    /// Start an automatic read of the pending invalidation unless one is in
+    /// flight, or Changes isn't the active tab (it stays pending and is
+    /// read when the tab becomes active again, in `show_tab`).
     fn start_auto_read(&mut self) -> Vec<Effect> {
-        if self.auto_in_flight.is_some() {
+        if self.tab != Tab::Changes || self.auto_in_flight.is_some() {
             return Vec::new();
         }
         let Some(pending) = self.auto_pending.take() else {
@@ -1648,13 +1724,20 @@ impl App {
         }
     }
 
-    fn show_tab(&mut self, tab: Tab) {
+    /// Switch to `tab`, catching it up with a quiet refresh if it went
+    /// dirty while inactive.
+    fn show_tab(&mut self, tab: Tab) -> Vec<Effect> {
         self.tab = tab;
         self.focus = match tab {
             Tab::Changes => self.first_changes_pane(),
             Tab::Files => Focus::FilesTree,
             Tab::Find => Focus::FindQuery,
         };
+        match tab {
+            Tab::Changes => self.start_auto_read(),
+            Tab::Files | Tab::Find if self.files_dirty => self.refresh_files_quiet(),
+            Tab::Files | Tab::Find => Vec::new(),
+        }
     }
 
     fn cycle_focus(&mut self, forward: bool) {
@@ -1676,8 +1759,7 @@ impl App {
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && self.modal.is_none()
         {
-            self.show_tab(Tab::Find);
-            return Vec::new();
+            return self.show_tab(Tab::Find);
         }
         match &mut self.modal {
             Some(Modal::Shortcuts) => {
@@ -1791,9 +1873,9 @@ impl App {
                 self.jump_offset = 0;
             }
             KeyCode::Char('h') => self.modal = Some(Modal::Shortcuts),
-            KeyCode::Char('1') => self.show_tab(Tab::Changes),
-            KeyCode::Char('2') => self.show_tab(Tab::Files),
-            KeyCode::Char('3') => self.show_tab(Tab::Find),
+            KeyCode::Char('1') => return self.show_tab(Tab::Changes),
+            KeyCode::Char('2') => return self.show_tab(Tab::Files),
+            KeyCode::Char('3') => return self.show_tab(Tab::Find),
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
             KeyCode::Char('n') if self.tab == Tab::Changes => self.navigate(true),
@@ -1923,7 +2005,7 @@ impl App {
             }
             MouseEventKind::Moved => self.hover = target,
             MouseEventKind::Down(MouseButton::Left) => match target {
-                Some(Target::Tab(tab)) => self.show_tab(tab),
+                Some(Target::Tab(tab)) => return self.show_tab(tab),
                 Some(Target::Pane(focus)) => {
                     self.focus = focus;
                     if matches!(focus, Focus::Diff | Focus::Preview) {

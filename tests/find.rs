@@ -4,8 +4,9 @@ use std::path::Path;
 
 use common::{Harness, TempDir, failure};
 use crossterm::event::{KeyCode, KeyModifiers};
-use gitplume::app::{Focus, Tab};
+use gitplume::app::{Event, Focus, Tab};
 use gitplume::model::GrepMatch;
+use gitplume::watcher::{Invalidation, Watch};
 
 const ROOT: &str = "/repo";
 
@@ -256,4 +257,97 @@ fn a_grep_failure_shows_a_toast() {
 
     assert!(harness.find("Could not search files").is_some());
     assert!(harness.find("boom").is_some());
+}
+
+fn changed(paths: &[&str]) -> Invalidation {
+    Invalidation {
+        status: true,
+        changed_paths: paths.iter().map(|p| p.to_string()).collect(),
+        ..Invalidation::default()
+    }
+}
+
+fn watch(harness: &mut Harness, invalidation: Invalidation) {
+    harness.send(Event::Watch(Watch::Changed(invalidation)));
+}
+
+#[test]
+fn a_filesystem_change_refreshes_a_stale_match_while_find_is_active() {
+    let mut harness = Harness::launched(Path::new(ROOT), Path::new(ROOT), &["a.rs"]);
+    harness
+        .git
+        .grep_matches
+        .lock()
+        .unwrap()
+        .push(found("a.rs", 5, "needle here"));
+    open_find(&mut harness);
+    type_text(&mut harness, "needle");
+    assert!(harness.find("a.rs:5").is_some());
+
+    // Lines were added above the match, so it now sits on a later line.
+    *harness.git.grep_matches.lock().unwrap() = vec![found("a.rs", 9, "needle here")];
+    watch(&mut harness, changed(&["a.rs"]));
+
+    assert!(harness.find("a.rs:9").is_some(), "{}", harness.screen());
+    assert!(harness.find("a.rs:5").is_none(), "{}", harness.screen());
+}
+
+#[test]
+fn a_deleted_match_disappears_after_a_filesystem_change() {
+    let mut harness = Harness::launched(Path::new(ROOT), Path::new(ROOT), &["a.rs"]);
+    harness
+        .git
+        .grep_matches
+        .lock()
+        .unwrap()
+        .push(found("a.rs", 5, "needle here"));
+    open_find(&mut harness);
+    type_text(&mut harness, "needle");
+    assert!(harness.find("a.rs:5").is_some());
+
+    // The match (or the whole file) is gone; grep now reports nothing.
+    harness.git.grep_matches.lock().unwrap().clear();
+    watch(&mut harness, changed(&["a.rs"]));
+
+    assert!(harness.find("a.rs:5").is_none(), "{}", harness.screen());
+    assert!(harness.find("No matches").is_some());
+}
+
+#[test]
+fn a_change_elsewhere_is_only_applied_after_switching_to_find() {
+    let mut harness = Harness::launched(Path::new(ROOT), Path::new(ROOT), &["a.rs"]);
+    harness
+        .git
+        .grep_matches
+        .lock()
+        .unwrap()
+        .push(found("a.rs", 5, "needle here"));
+    open_find(&mut harness);
+    type_text(&mut harness, "needle");
+    assert!(harness.find("a.rs:5").is_some());
+    // Move focus off the query box, where `1`/`3` type instead of switching.
+    harness.press(KeyCode::Down);
+    assert_eq!(harness.app.focus, Focus::FindResults);
+
+    harness.press(KeyCode::Char('1')); // Changes tab
+    let grep_calls = |h: &Harness| {
+        h.git
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("grep"))
+            .count()
+    };
+    let calls_before = grep_calls(&harness);
+
+    *harness.git.grep_matches.lock().unwrap() = vec![found("a.rs", 9, "needle here")];
+    watch(&mut harness, changed(&["a.rs"]));
+
+    assert_eq!(
+        grep_calls(&harness),
+        calls_before,
+        "no search runs while Find is not active"
+    );
+
+    harness.press(KeyCode::Char('3')); // back to Find
+    assert!(harness.find("a.rs:9").is_some(), "{}", harness.screen());
 }
