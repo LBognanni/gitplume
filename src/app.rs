@@ -21,7 +21,7 @@ pub const MAX_FILE_JUMP_RESULTS: usize = 100;
 /// Most find-in-files matches listed, in total across every file.
 pub const MAX_FIND_RESULTS: usize = 500;
 /// Find query length below which no search runs.
-const MIN_FIND_QUERY: usize = 3;
+pub const MIN_FIND_QUERY: usize = 3;
 /// Context rows kept above a change when scrolling to it.
 const CHANGE_CONTEXT: usize = 4;
 /// Rows or columns scrolled per mouse wheel step in lists and trees.

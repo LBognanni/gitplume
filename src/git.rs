@@ -12,11 +12,12 @@ const NON_UTF8_REASON: &str = "Non-UTF-8 paths are not supported.";
 /// A grep match's text, trimmed to this many characters.
 const MAX_MATCH_TEXT: usize = 200;
 /// Pathspec argv budget per `grep` call, comfortably under each platform's
-/// command-line length limit.
+/// command-line length limit (macOS's is the tightest non-Windows one, at
+/// about 1 MiB including the environment).
 #[cfg(windows)]
 const MAX_ARGV_BYTES: usize = 28_000;
 #[cfg(not(windows))]
-const MAX_ARGV_BYTES: usize = 1_000_000;
+const MAX_ARGV_BYTES: usize = 256_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitError {
@@ -101,7 +102,10 @@ pub trait GitApi: Send + Sync {
     fn commit_files(&self, root: &Path, commit: &Commit) -> Result<Vec<CommitFile>, GitError>;
     fn diff(&self, root: &Path, entry: &DiffEntry) -> Result<String, GitError>;
     /// Search `paths` (relative to `cwd`) for `query`, up to `limit` matches
-    /// in total. Returns the matches and whether more were cut off.
+    /// in total. Returns the matches and whether more were cut off. `paths`
+    /// are searched in pathspec-sized chunks, each as one `grep` call capped
+    /// per file (not per call) at the matches still needed, so a single very
+    /// repetitive file cannot flood one chunk's output.
     fn grep(
         &self,
         cwd: &Path,
@@ -165,7 +169,10 @@ impl<R: Runner> CliGit<R> {
             if remaining == 0 {
                 return Ok((matches, true));
             }
-            let max_count = format!("--max-count={remaining}");
+            // Ask each file for one match more than needed, so finding exactly
+            // `remaining` never gets mistaken for a cut-off (as `matching_files`
+            // does for file jump).
+            let max_count = format!("--max-count={}", remaining + 1);
             let refs: Vec<&str> = chunk.iter().map(String::as_str).collect();
             let args: Vec<&str> = [
                 "grep",
@@ -188,7 +195,7 @@ impl<R: Runner> CliGit<R> {
             .collect();
             let output = self.runner.run(cwd, &args, &[0, 1])?;
             let parsed = parse_grep(&output);
-            let hit_limit = parsed.len() >= remaining;
+            let hit_limit = parsed.len() > remaining;
             matches.extend(parsed.into_iter().take(remaining));
             if hit_limit {
                 return Ok((matches, true));
@@ -1119,7 +1126,7 @@ mod tests {
                     "--no-color",
                     "--no-column",
                     "--no-full-name",
-                    "--max-count=50",
+                    "--max-count=51", // one more than the limit of 50
                     "-e",
                     "hello",
                     "--",
@@ -1179,6 +1186,23 @@ mod tests {
     }
 
     #[test]
+    fn grep_does_not_report_truncation_when_the_limit_is_met_exactly() {
+        let git = replying("a.txt\x001\x00one\nb.txt\x002\x00two\n");
+        let paths = vec!["a.txt".to_string(), "b.txt".to_string()];
+
+        let (matches, truncated) = git.grep(root(), "x", &paths, 2).unwrap();
+
+        assert_eq!(
+            matches,
+            [grep_match("a.txt", 1, "one"), grep_match("b.txt", 2, "two")]
+        );
+        assert!(
+            !truncated,
+            "exactly `limit` matches and nothing more is not a truncation"
+        );
+    }
+
+    #[test]
     fn grep_requests_the_remaining_count_per_chunk() {
         let git = CliGit::new(Recording {
             calls: Mutex::new(Vec::new()),
@@ -1188,10 +1212,11 @@ mod tests {
                     .find_map(|a| a.strip_prefix("--max-count="))
                     .unwrap();
                 Ok(match max_count {
-                    // The first chunk sees the full limit; after it returns
-                    // one match, the second chunk is asked for one less.
-                    "5" => "a.txt\x001\x00one\n".to_string(),
-                    "4" => "b.txt\x002\x00two\n".to_string(),
+                    // The first chunk sees one more than the full limit;
+                    // after it returns one match, the second chunk is asked
+                    // for one less (and still one more than what's left).
+                    "6" => "a.txt\x001\x00one\n".to_string(),
+                    "5" => "b.txt\x002\x00two\n".to_string(),
                     other => panic!("unexpected --max-count={other}"),
                 })
             }),

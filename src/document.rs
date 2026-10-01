@@ -590,6 +590,28 @@ index 1111111..2222222 100644
     }
 
     #[test]
+    fn mark_row_highlights_only_the_targeted_row() {
+        let mut doc = load_preview(&temp_file("marked.txt", b"a\nb\nc\n"));
+        assert_eq!(doc.rows[0].background(), None, "nothing marked yet");
+
+        doc.mark_row(1);
+
+        assert_eq!(doc.rows[0].background(), None);
+        assert_eq!(doc.rows[2].background(), None);
+        assert!(doc.rows[1].background().is_some());
+        assert_ne!(doc.rows[1].background(), doc.rows[0].background());
+    }
+
+    #[test]
+    fn mark_row_ignores_an_out_of_range_index() {
+        let mut doc = load_preview(&temp_file("short.txt", b"only\n"));
+
+        doc.mark_row(50); // must not panic
+
+        assert_eq!(doc.rows[0].background(), None);
+    }
+
+    #[test]
     fn preview_returns_friendly_messages() {
         let large = vec![b'x'; MAX_PREVIEW_BYTES as usize + 1];
         for (name, contents, message) in [

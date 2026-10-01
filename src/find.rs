@@ -19,8 +19,9 @@ fn matches(pattern: &[char], path: &[char]) -> bool {
                 (0..=path.len()).any(|i| matches(rest, &path[i..]))
             } else {
                 let rest = &pattern[1..];
+                // `*` consumes characters up to (not including) the next `/`.
                 (0..=path.len())
-                    .take_while(|&i| path.get(i) != Some(&'/') || i == 0)
+                    .take_while(|&i| i == 0 || path[i - 1] != '/')
                     .any(|i| matches(rest, &path[i..]))
             }
         }
@@ -92,6 +93,12 @@ mod tests {
     }
 
     #[test]
+    fn single_star_in_a_path_pattern_matches_one_folder_level() {
+        let files = index(&["src/sub/mod.rs", "src/mod.rs", "src/deep/sub/mod.rs"]);
+        assert_eq!(filter_paths(&files, "src/*/mod.rs"), ["src/sub/mod.rs"]);
+    }
+
+    #[test]
     fn double_star_spans_folders() {
         let files = index(&["src/a.rs", "src/sub/b.rs", "tests/c.rs"]);
         assert_eq!(filter_paths(&files, "src/**"), ["src/a.rs", "src/sub/b.rs"]);
@@ -121,5 +128,13 @@ mod tests {
         assert!(glob_match("a?c", "abc"));
         assert!(!glob_match("a?c", "ac"));
         assert!(!glob_match("a?c", "abbc"));
+    }
+
+    #[test]
+    fn single_star_matches_a_whole_folder_name_but_not_across_it() {
+        assert!(glob_match("src/*/mod.rs", "src/foo/mod.rs"));
+        assert!(glob_match("s*/a.rs", "src/a.rs"));
+        assert!(!glob_match("a*", "a/b"), "* must not cross a /");
+        assert!(!glob_match("src/*/mod.rs", "src/foo/bar/mod.rs"));
     }
 }

@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Widget};
 
 use crate::app::{
-    Action, App, Button, FileNode, Focus, MAX_FILE_JUMP_RESULTS, MAX_FIND_RESULTS, Modal, Severity,
-    Tab, Target, TreeRow,
+    Action, App, Button, FileNode, Focus, MAX_FILE_JUMP_RESULTS, MAX_FIND_RESULTS, MIN_FIND_QUERY,
+    Modal, Severity, Tab, Target, TreeRow,
 };
 use crate::code_view::{CodeView, Scrollbar, render_scrollbar, scrollbar_layout};
 use crate::icons;
@@ -286,7 +286,8 @@ fn render_find(app: &mut App, area: Rect, buf: &mut Buffer) {
         buf,
     );
 
-    let message = if app.find.query.chars().count() < 3 {
+    let message = if app.find.query.chars().count() < MIN_FIND_QUERY {
+        // Keep this in sync with `MIN_FIND_QUERY`, currently 3.
         Some("Type at least 3 characters")
     } else if app.find.loading {
         Some("Searching…")

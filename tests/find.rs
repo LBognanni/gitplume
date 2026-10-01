@@ -27,6 +27,25 @@ fn open_find(harness: &mut Harness) {
     harness.press_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
 }
 
+/// The sidebar is `SIDE_WIDTH` (30) columns wide at the default layout used
+/// by every test here; the preview pane starts just past its divider.
+const PREVIEW_LEFT_EDGE: u16 = 31;
+
+/// Cell position of `text`'s first occurrence at or past column `min_x`.
+fn find_from(harness: &Harness, text: &str, min_x: u16) -> Option<(u16, u16)> {
+    let buffer = harness.buffer();
+    let needle: Vec<String> = text.chars().map(String::from).collect();
+    (0..buffer.area.height).find_map(|y| {
+        let cells: Vec<&str> = (min_x..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        cells
+            .windows(needle.len())
+            .position(|window| window.iter().zip(&needle).all(|(a, b)| *a == b))
+            .map(|x| (min_x + x as u16, y))
+    })
+}
+
 #[test]
 fn ctrl_f_opens_the_find_tab_with_the_query_box_focused() {
     let mut harness = Harness::launched(Path::new(ROOT), Path::new(ROOT), &["a.txt"]);
@@ -120,30 +139,49 @@ fn filter_limits_the_paths_sent_to_grep() {
     assert!(!grep_call.contains("README.md"));
 }
 
+/// `count` zero-padded, fixed-width labels (`row-0001`, ...) that never
+/// collide as substrings of one another, so screen assertions are exact.
+fn numbered_rows(count: usize) -> Vec<String> {
+    (1..=count).map(|i| format!("row-{i:04}")).collect()
+}
+
 #[test]
 fn clicking_a_match_opens_the_file_scrolled_to_its_line() {
     let dir = TempDir::new("find-click");
-    let body: String = (1..=20)
-        .map(|i| format!("line{i}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    std::fs::write(dir.0.join("notes.txt"), body).unwrap();
+    let rows = numbered_rows(200);
+    std::fs::write(dir.0.join("notes.txt"), rows.join("\n") + "\n").unwrap();
     let mut harness = Harness::launched(&dir.0, &dir.0, &["notes.txt"]);
-    harness
-        .git
-        .grep_matches
-        .lock()
-        .unwrap()
-        .push(found("notes.txt", 10, "line10"));
+    harness.git.grep_matches.lock().unwrap().push(found(
+        "notes.txt",
+        150,
+        &format!("target {}", rows[149]),
+    ));
     open_find(&mut harness);
 
-    type_text(&mut harness, "line");
-    let position = harness.at("line10");
-    harness.click(position);
+    type_text(&mut harness, "target");
+    // The sidebar is too narrow to show the whole row, so click on the
+    // `path:line` prefix, which always fits and is unique on screen.
+    let result_position = harness.at("notes.txt:150");
+    harness.click(result_position);
 
-    assert!(harness.screen().contains("line10"), "{}", harness.screen());
-    assert!(harness.line(2).contains("notes.txt"));
+    assert!(harness.line(2).contains("notes.txt"), "{}", harness.line(2));
+    let marked = find_from(&harness, &rows[149], PREVIEW_LEFT_EDGE)
+        .expect("the target line must be visible in the preview");
+    assert!(
+        find_from(&harness, &rows[0], PREVIEW_LEFT_EDGE).is_none(),
+        "the file's first line must have scrolled out of view: {}",
+        harness.screen()
+    );
+
+    // The matched row's background is distinct from its neighbor's: the
+    // preview has no other reason for adjacent rows to differ.
+    let buffer = harness.buffer();
+    let marked_bg = buffer[marked].bg;
+    let neighbor_bg = buffer[(marked.0, marked.1 + 1)].bg;
+    assert_ne!(
+        marked_bg, neighbor_bg,
+        "the matched line should be highlighted"
+    );
 }
 
 #[test]
@@ -160,11 +198,21 @@ fn down_then_enter_opens_the_highlighted_match() {
     open_find(&mut harness);
 
     type_text(&mut harness, "needle");
+    assert!(
+        !harness.line(2).contains("notes.txt"),
+        "nothing is open before Enter: {}",
+        harness.line(2)
+    );
+
     harness.press(KeyCode::Down);
     assert_eq!(harness.app.focus, Focus::FindResults);
     harness.press(KeyCode::Enter);
 
-    assert!(harness.screen().contains("needle"), "{}", harness.screen());
+    assert!(
+        harness.line(2).contains("notes.txt"),
+        "Enter on the highlighted result must open it: {}",
+        harness.line(2)
+    );
 }
 
 #[test]
