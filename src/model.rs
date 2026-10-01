@@ -48,6 +48,15 @@ pub struct CommitFile {
     pub parent: Option<String>,
 }
 
+/// One line of a `git grep` match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrepMatch {
+    pub path: String,
+    /// 1-based line number.
+    pub line: usize,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoState {
     pub root: PathBuf,

@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Widget};
 
 use crate::app::{
-    Action, App, Button, FileNode, Focus, MAX_FILE_JUMP_RESULTS, Modal, Severity, Tab, Target,
-    TreeRow,
+    Action, App, Button, FileNode, Focus, MAX_FILE_JUMP_RESULTS, MAX_FIND_RESULTS, Modal, Severity,
+    Tab, Target, TreeRow,
 };
 use crate::code_view::{CodeView, Scrollbar, render_scrollbar, scrollbar_layout};
 use crate::icons;
@@ -26,9 +26,10 @@ pub const SHORTCUTS: &str = "Mouse controls are supported throughout.
 Navigation
   j / k       Move selection or scroll
   Enter       Open the selected item
-  1 / 2       Changes / Files tab
+  1 / 2 / 3   Changes / Files / Find tab
   n / p       Next / previous diff change
   t           Jump to a file (Files tab)
+  Ctrl+F      Find in files
 
 File actions
   Space       Check or uncheck a file
@@ -57,6 +58,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     match app.tab {
         Tab::Changes => render_changes(app, body, buf),
         Tab::Files => render_files(app, body, buf),
+        Tab::Find => render_find(app, body, buf),
     }
     let text = match app.hint() {
         Some(hint) => hint.to_string(),
@@ -95,7 +97,11 @@ fn render_tabs(app: &mut App, area: Rect, buf: &mut Buffer) {
     buf.set_style(area, Style::new().fg(theme::MUTED_TEXT).bg(theme::SURFACE));
     let mut x = area.x;
     let mut active = (area.x, area.x);
-    for (tab, label) in [(Tab::Changes, " Changes "), (Tab::Files, " Files ")] {
+    for (tab, label) in [
+        (Tab::Changes, " Changes "),
+        (Tab::Files, " Files "),
+        (Tab::Find, " Find "),
+    ] {
         let style = if app.tab == tab {
             Style::new()
                 .fg(theme::TEXT)
@@ -231,7 +237,11 @@ fn render_files(app: &mut App, area: Rect, buf: &mut Buffer) {
     if !loading {
         file_rows(app, tree.inner(ratatui::layout::Margin::new(1, 1)), buf);
     }
+    render_preview(app, pane, buf);
+}
 
+/// The preview pane, shared by the Files and Find tabs.
+fn render_preview(app: &mut App, pane: Rect, buf: &mut Buffer) {
     let [title, view] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(pane);
     viewer_title(app, title, &app.preview_title.clone(), &[], buf);
     if app.preview_loading {
@@ -242,6 +252,156 @@ fn render_files(app: &mut App, area: Rect, buf: &mut Buffer) {
         render_view(&mut app.preview_view, view, buf);
     }
     app.hits.push((view, Target::Pane(Focus::Preview)));
+}
+
+/// The Find tab: a Find box, a Filter box, and the scrollable match list,
+/// sharing the Files tab's sidebar width.
+fn render_find(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let [sidebar, divider, pane] = split_columns(&mut app.panes.files, area);
+    splitter(app, Splitter::Files, divider, buf);
+
+    let truncated = app.find.truncated;
+    let [query_area, filter_area, results_area, note_area] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Fill(1),
+        Constraint::Length(truncated as u16),
+    ])
+    .areas(sidebar);
+
+    text_input(
+        app,
+        query_area,
+        Focus::FindQuery,
+        &app.find.query.clone(),
+        "Find",
+        buf,
+    );
+    text_input(
+        app,
+        filter_area,
+        Focus::FindFilter,
+        &app.find.filter.clone(),
+        "Filter, e.g. *.rs, src/**",
+        buf,
+    );
+
+    let message = if app.find.query.chars().count() < 3 {
+        Some("Type at least 3 characters")
+    } else if app.find.loading {
+        Some("Searching…")
+    } else if app.find.results.is_empty() {
+        Some("No matches")
+    } else {
+        None
+    };
+    bordered_list(
+        message
+            .map(|m| Line::styled(m, Style::new().add_modifier(Modifier::DIM)))
+            .into_iter()
+            .collect(),
+        results_area,
+        buf,
+    );
+    app.hits
+        .push((results_area, Target::Pane(Focus::FindResults)));
+    if message.is_none() {
+        find_rows(
+            app,
+            results_area.inner(ratatui::layout::Margin::new(1, 1)),
+            buf,
+        );
+    }
+    if truncated {
+        Paragraph::new(format!("Showing first {MAX_FIND_RESULTS} matches"))
+            .style(Style::new().fg(theme::MUTED_TEXT))
+            .render(note_area, buf);
+    }
+
+    render_preview(app, pane, buf);
+}
+
+/// A bordered single-line text input: a block cursor while focused, a dim
+/// placeholder while empty.
+fn text_input(
+    app: &mut App,
+    area: Rect,
+    focus: Focus,
+    text: &str,
+    placeholder: &str,
+    buf: &mut Buffer,
+) {
+    let focused = app.focus == focus;
+    let border_color = if focused {
+        theme::ACCENT
+    } else {
+        theme::BORDER
+    };
+    Block::bordered()
+        .border_style(Style::new().fg(border_color))
+        .style(Style::new().fg(theme::TEXT).bg(theme::SURFACE))
+        .render(area, buf);
+    app.hits.push((area, Target::Pane(focus)));
+    if area.height < 2 {
+        return;
+    }
+    let line = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: 1,
+    };
+    if text.is_empty() {
+        Span::styled(
+            placeholder,
+            Style::new()
+                .fg(theme::MUTED_TEXT)
+                .add_modifier(Modifier::DIM),
+        )
+        .render(line, buf);
+    } else {
+        Span::raw(text.to_string()).render(line, buf);
+    }
+    if focused && line.width > 0 {
+        let x = line.x + (text.chars().count() as u16).min(line.width.saturating_sub(1));
+        buf[(x, line.y)].set_style(Style::new().add_modifier(Modifier::REVERSED));
+    }
+}
+
+/// Draw the visible rows of the find-in-files result list.
+fn find_rows(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let lines: Vec<Line<'static>> = app
+        .find
+        .results
+        .iter()
+        .map(|found| {
+            Line::from(vec![
+                Span::styled(
+                    format!("{}:{} ", found.path, found.line),
+                    Style::new().fg(theme::MUTED_TEXT),
+                ),
+                Span::raw(found.text.clone()),
+            ])
+        })
+        .collect();
+    let cursor = app.find.cursor;
+    let focused = app.focus == Focus::FindResults;
+    let find = &mut app.find;
+    let hits = tree_rows(
+        lines,
+        cursor,
+        focused,
+        &mut find.offset,
+        &mut find.scroll_x,
+        &mut find.followed,
+        area,
+        buf,
+    );
+    app.hits
+        .extend(hits.into_iter().map(|(rect, row)| match row {
+            Ok(row) => (rect, Target::FindResult(row)),
+            Err(bar) => (rect, Target::Scrollbar(Focus::FindResults, bar)),
+        }));
 }
 
 fn loading_line() -> Line<'static> {

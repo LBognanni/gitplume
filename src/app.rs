@@ -9,14 +9,19 @@ use ratatui::layout::{Position, Rect};
 
 use crate::code_view::{CodeView, Press, Scrollbar};
 use crate::document::Document;
+use crate::find;
 use crate::git::GitError;
 use crate::layout::{Panes, Splitter};
-use crate::model::{Commit, CommitFile, DiffEntry, FileEntry, RepoState, Side};
+use crate::model::{Commit, CommitFile, DiffEntry, FileEntry, GrepMatch, RepoState, Side};
 use crate::watcher::{Invalidation, Watch};
 
 const TOAST_LIFETIME: Duration = Duration::from_secs(5);
 /// Most file jump results listed.
 pub const MAX_FILE_JUMP_RESULTS: usize = 100;
+/// Most find-in-files matches listed, in total across every file.
+pub const MAX_FIND_RESULTS: usize = 500;
+/// Find query length below which no search runs.
+const MIN_FIND_QUERY: usize = 3;
 /// Context rows kept above a change when scrolling to it.
 const CHANGE_CONTEXT: usize = 4;
 /// Rows or columns scrolled per mouse wheel step in lists and trees.
@@ -36,6 +41,7 @@ enum Streak {
 pub enum Tab {
     Changes,
     Files,
+    Find,
 }
 
 /// A focusable pane.
@@ -46,20 +52,21 @@ pub enum Focus {
     Commits,
     Diff,
     FilesTree,
+    /// The Files or Find tab's preview, shared between both.
     Preview,
-}
-
-impl Focus {
-    fn tab(self) -> Tab {
-        match self {
-            Self::FilesTree | Self::Preview => Tab::Files,
-            _ => Tab::Changes,
-        }
-    }
+    FindQuery,
+    FindFilter,
+    FindResults,
 }
 
 const CHANGES_ORDER: [Focus; 4] = [Focus::Staged, Focus::Unstaged, Focus::Commits, Focus::Diff];
 const FILES_ORDER: [Focus; 2] = [Focus::FilesTree, Focus::Preview];
+const FIND_ORDER: [Focus; 4] = [
+    Focus::FindQuery,
+    Focus::FindFilter,
+    Focus::FindResults,
+    Focus::Preview,
+];
 
 /// A Git mutation on status entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +133,8 @@ pub enum Target {
     TreeRow(usize),
     /// A visible Files tree row.
     FileRow(usize),
+    /// A visible Find-in-files result row.
+    FindResult(usize),
     /// The file jump dialog; swallows clicks.
     JumpDialog,
     /// A file jump result.
@@ -154,7 +163,11 @@ impl Target {
         };
         match self {
             Self::Pane(
-                focus @ (Focus::Staged | Focus::Unstaged | Focus::Commits | Focus::FilesTree),
+                focus @ (Focus::Staged
+                | Focus::Unstaged
+                | Focus::Commits
+                | Focus::FilesTree
+                | Focus::FindResults),
             ) => Some(focus),
             Self::Row(s, _) | Self::Checkbox(s, _) | Self::Button(Button::Row(s, _, _)) => {
                 Some(side(s))
@@ -162,6 +175,7 @@ impl Target {
             Self::Scrollbar(focus, _) => Some(focus),
             Self::TreeRow(_) => Some(Focus::Commits),
             Self::FileRow(_) => Some(Focus::FilesTree),
+            Self::FindResult(_) => Some(Focus::FindResults),
             _ => None,
         }
     }
@@ -460,6 +474,37 @@ impl FileTree {
     }
 }
 
+/// Find-in-files: the query and filter text, and the current results.
+#[derive(Debug, Default)]
+pub struct FindState {
+    pub query: String,
+    pub filter: String,
+    pub results: Vec<GrepMatch>,
+    /// More matches existed beyond `MAX_FIND_RESULTS`.
+    pub truncated: bool,
+    pub loading: bool,
+    pub cursor: Option<usize>,
+    /// First visible row, kept by `ui::render` so the cursor stays visible.
+    pub offset: usize,
+    /// First visible cell column.
+    pub scroll_x: usize,
+    /// Cursor row last scrolled into view; the wheel scrolls freely until it moves.
+    pub followed: Option<usize>,
+}
+
+impl FindState {
+    fn step(&mut self, down: bool) {
+        let Some(last) = self.results.len().checked_sub(1) else {
+            return;
+        };
+        self.cursor = Some(match (self.cursor, down) {
+            (None, _) => 0,
+            (Some(index), true) => (index + 1).min(last),
+            (Some(index), false) => index.saturating_sub(1),
+        });
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Information,
@@ -522,6 +567,14 @@ pub enum Job {
         path: PathBuf,
         token: u64,
     },
+    /// Search `paths` for `query`; runs on the latest-only grep worker.
+    Grep {
+        cwd: PathBuf,
+        query: String,
+        paths: Vec<String>,
+        limit: usize,
+        token: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -566,6 +619,11 @@ pub enum Event {
     Preview {
         token: u64,
         doc: Document,
+    },
+    /// Find-in-files results for request `token`.
+    Grep {
+        token: u64,
+        result: Result<(Vec<GrepMatch>, bool), GitError>,
     },
 }
 
@@ -644,6 +702,10 @@ pub struct App {
     pub jump_rows: usize,
     preview_token: u64,
     pub preview_loading: bool,
+    /// The line a find-in-files match asked the preview to jump to.
+    preview_line: Option<usize>,
+    pub find: FindState,
+    find_token: u64,
     pub diff_title: String,
     pub preview_title: String,
     pub diff_view: CodeView,
@@ -707,6 +769,9 @@ impl App {
             jump_rows: 0,
             preview_token: 0,
             preview_loading: false,
+            preview_line: None,
+            find: FindState::default(),
+            find_token: 0,
             diff_title: String::new(),
             preview_title: String::new(),
             diff_view: CodeView::new(),
@@ -750,11 +815,12 @@ impl App {
     fn clear_preview(&mut self) {
         self.preview_token += 1;
         self.preview_loading = false;
+        self.preview_line = None;
         self.preview_title.clear();
         self.preview_view.set_document(Document::empty());
     }
 
-    fn apply_files(&mut self, files: Vec<String>) {
+    fn apply_files(&mut self, files: Vec<String>) -> Vec<Effect> {
         self.files = FileTree::build(self.cwd.display().to_string(), &files);
         self.search_index = files
             .into_iter()
@@ -764,6 +830,7 @@ impl App {
             })
             .collect();
         self.clear_preview();
+        self.search()
     }
 
     /// Activate the cursor node: toggle a folder (not the root), or preview a file.
@@ -786,10 +853,105 @@ impl App {
             .to_string();
         self.preview_token += 1;
         self.preview_loading = true;
+        self.preview_line = None;
         vec![Effect::Git(Job::Preview {
             path,
             token: self.preview_token,
         })]
+    }
+
+    /// Open a find-in-files match in the preview, scrolled to its line.
+    fn open_match(&mut self, found: GrepMatch) -> Vec<Effect> {
+        let path = self.cwd.join(&found.path);
+        self.preview_title = path
+            .strip_prefix(&self.root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        self.preview_token += 1;
+        self.preview_loading = true;
+        self.preview_line = Some(found.line);
+        vec![Effect::Git(Job::Preview {
+            path,
+            token: self.preview_token,
+        })]
+    }
+
+    /// Run or clear find-in-files, bumping the token so a stale result is dropped.
+    fn search(&mut self) -> Vec<Effect> {
+        self.find_token += 1;
+        if self.find.query.chars().count() < MIN_FIND_QUERY {
+            self.find.loading = false;
+            self.find.results.clear();
+            self.find.truncated = false;
+            self.find.cursor = None;
+            self.find.offset = 0;
+            self.find.followed = None;
+            return Vec::new();
+        }
+        let paths = find::filter_paths(&self.search_index, &self.find.filter);
+        self.find.loading = true;
+        vec![Effect::Git(Job::Grep {
+            cwd: self.cwd.clone(),
+            query: self.find.query.clone(),
+            paths,
+            limit: MAX_FIND_RESULTS,
+            token: self.find_token,
+        })]
+    }
+
+    /// The field the focused find input box edits.
+    fn find_field_mut(&mut self) -> &mut String {
+        match self.focus {
+            Focus::FindFilter => &mut self.find.filter,
+            _ => &mut self.find.query,
+        }
+    }
+
+    /// Edit the focused find input box, or move focus out of it.
+    fn find_box_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        match key.code {
+            KeyCode::Tab => self.cycle_focus(true),
+            KeyCode::BackTab => self.cycle_focus(false),
+            KeyCode::Down | KeyCode::Enter => {
+                if !self.find.results.is_empty() {
+                    self.focus = Focus::FindResults;
+                    self.find.cursor = Some(0);
+                }
+            }
+            KeyCode::Backspace => {
+                self.find_field_mut().pop();
+                return self.search();
+            }
+            KeyCode::Char(c) if (key.modifiers - KeyModifiers::SHIFT).is_empty() => {
+                self.find_field_mut().push(c);
+                return self.search();
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn find_results_key(&mut self, code: KeyCode) -> Vec<Effect> {
+        match code {
+            KeyCode::Down | KeyCode::Char('j') => self.find.step(true),
+            KeyCode::Up | KeyCode::Char('k') => self.find.step(false),
+            KeyCode::Enter => return self.open_find_cursor(),
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn open_find_cursor(&mut self) -> Vec<Effect> {
+        let Some(found) = self
+            .find
+            .cursor
+            .and_then(|i| self.find.results.get(i))
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        self.open_match(found)
     }
 
     fn files_key(&mut self, code: KeyCode) -> Vec<Effect> {
@@ -1299,7 +1461,7 @@ impl App {
                 }
                 self.files_tree_loading = false;
                 match result {
-                    Ok(files) => self.apply_files(files),
+                    Ok(files) => return self.apply_files(files),
                     Err(error) => self.git_error("refresh files", &error),
                 }
             }
@@ -1308,7 +1470,33 @@ impl App {
                     return Vec::new();
                 }
                 self.preview_loading = false;
-                self.preview_view.set_document(doc);
+                match self.preview_line.take() {
+                    Some(line) => {
+                        let row = line.saturating_sub(1);
+                        let mut doc = doc;
+                        doc.mark_row(row);
+                        self.preview_view.set_document(doc);
+                        self.preview_view
+                            .scroll_to_row(row.saturating_sub(CHANGE_CONTEXT));
+                    }
+                    None => self.preview_view.set_document(doc),
+                }
+            }
+            Event::Grep { token, result } => {
+                if token != self.find_token {
+                    return Vec::new();
+                }
+                self.find.loading = false;
+                match result {
+                    Ok((results, truncated)) => {
+                        self.find.results = results;
+                        self.find.truncated = truncated;
+                        self.find.cursor = None;
+                        self.find.offset = 0;
+                        self.find.followed = None;
+                    }
+                    Err(error) => self.git_error("search files", &error),
+                }
             }
             Event::CommitFiles { token, result } => {
                 if token != self.commit_files_token {
@@ -1465,6 +1653,7 @@ impl App {
         self.focus = match tab {
             Tab::Changes => self.first_changes_pane(),
             Tab::Files => Focus::FilesTree,
+            Tab::Find => Focus::FindQuery,
         };
     }
 
@@ -1472,6 +1661,7 @@ impl App {
         let order: &[Focus] = match self.tab {
             Tab::Changes => &CHANGES_ORDER,
             Tab::Files => &FILES_ORDER,
+            Tab::Find => &FIND_ORDER,
         };
         let index = order.iter().position(|f| *f == self.focus).unwrap_or(0);
         let step = if forward { 1 } else { order.len() - 1 };
@@ -1481,6 +1671,13 @@ impl App {
     fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return vec![Effect::Quit];
+        }
+        if key.code == KeyCode::Char('f')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.modal.is_none()
+        {
+            self.show_tab(Tab::Find);
+            return Vec::new();
         }
         match &mut self.modal {
             Some(Modal::Shortcuts) => {
@@ -1505,6 +1702,21 @@ impl App {
             }
             Some(Modal::FileJump { .. }) => return self.jump_key(key.code),
             None => {}
+        }
+        if matches!(self.focus, Focus::FindQuery | Focus::FindFilter) {
+            return self.find_box_key(key);
+        }
+        if self.focus == Focus::FindResults
+            && matches!(
+                key.code,
+                KeyCode::Down
+                    | KeyCode::Up
+                    | KeyCode::Char('j')
+                    | KeyCode::Char('k')
+                    | KeyCode::Enter
+            )
+        {
+            return self.find_results_key(key.code);
         }
         if let Some(side) = self.focused_side() {
             let list = self.list_mut(side);
@@ -1581,6 +1793,7 @@ impl App {
             KeyCode::Char('h') => self.modal = Some(Modal::Shortcuts),
             KeyCode::Char('1') => self.show_tab(Tab::Changes),
             KeyCode::Char('2') => self.show_tab(Tab::Files),
+            KeyCode::Char('3') => self.show_tab(Tab::Find),
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
             KeyCode::Char('n') if self.tab == Tab::Changes => self.navigate(true),
@@ -1588,7 +1801,7 @@ impl App {
             KeyCode::Char('w') => {
                 let view = match self.tab {
                     Tab::Changes => &mut self.diff_view,
-                    Tab::Files => &mut self.preview_view,
+                    Tab::Files | Tab::Find => &mut self.preview_view,
                 };
                 view.set_wrapped(!view.wrapped());
             }
@@ -1712,7 +1925,6 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => match target {
                 Some(Target::Tab(tab)) => self.show_tab(tab),
                 Some(Target::Pane(focus)) => {
-                    self.tab = focus.tab();
                     self.focus = focus;
                     if matches!(focus, Focus::Diff | Focus::Preview) {
                         self.capture = Some(focus);
@@ -1720,7 +1932,6 @@ impl App {
                     }
                 }
                 Some(Target::Scrollbar(focus, bar)) => {
-                    self.tab = focus.tab();
                     self.focus = focus;
                     let pos = Position::new(mouse.column, mouse.row);
                     match bar.press(pos, self.list_scroll(focus, bar.vertical)) {
@@ -1761,6 +1972,13 @@ impl App {
                     self.files.cursor = self.files.rows().get(row).copied();
                     return self.activate_file_row();
                 }
+                Some(Target::FindResult(row)) => {
+                    self.focus = Focus::FindResults;
+                    self.find.cursor = Some(row);
+                    if let Some(found) = self.find.results.get(row).cloned() {
+                        return self.open_match(found);
+                    }
+                }
                 Some(Target::JumpResult(index)) => {
                     if let Some(path) = self.jump_matches().0.get(index) {
                         return self.jump_to(&path.clone());
@@ -1799,7 +2017,8 @@ impl App {
             Focus::Unstaged => Some((&mut self.unstaged.offset, None)),
             Focus::Commits => Some((&mut self.commits.offset, Some(&mut self.commits.scroll_x))),
             Focus::FilesTree => Some((&mut self.files.offset, Some(&mut self.files.scroll_x))),
-            Focus::Diff | Focus::Preview => None,
+            Focus::FindResults => Some((&mut self.find.offset, Some(&mut self.find.scroll_x))),
+            Focus::Diff | Focus::Preview | Focus::FindQuery | Focus::FindFilter => None,
         }
     }
 

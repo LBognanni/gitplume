@@ -4,11 +4,19 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::model::{Commit, CommitFile, DiffEntry, FileEntry, RepoState, Side};
+use crate::model::{Commit, CommitFile, DiffEntry, FileEntry, GrepMatch, RepoState, Side};
 
 const MAX_COMMITS: usize = 100;
 const CONTEXT: &str = "-U1000000";
 const NON_UTF8_REASON: &str = "Non-UTF-8 paths are not supported.";
+/// A grep match's text, trimmed to this many characters.
+const MAX_MATCH_TEXT: usize = 200;
+/// Pathspec argv budget per `grep` call, comfortably under each platform's
+/// command-line length limit.
+#[cfg(windows)]
+const MAX_ARGV_BYTES: usize = 28_000;
+#[cfg(not(windows))]
+const MAX_ARGV_BYTES: usize = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitError {
@@ -92,6 +100,15 @@ pub trait GitApi: Send + Sync {
     fn commits(&self, root: &Path) -> Result<Vec<Commit>, GitError>;
     fn commit_files(&self, root: &Path, commit: &Commit) -> Result<Vec<CommitFile>, GitError>;
     fn diff(&self, root: &Path, entry: &DiffEntry) -> Result<String, GitError>;
+    /// Search `paths` (relative to `cwd`) for `query`, up to `limit` matches
+    /// in total. Returns the matches and whether more were cut off.
+    fn grep(
+        &self,
+        cwd: &Path,
+        query: &str,
+        paths: &[String],
+        limit: usize,
+    ) -> Result<(Vec<GrepMatch>, bool), GitError>;
     fn stage(&self, root: &Path, paths: &[&str]) -> Result<(), GitError>;
     fn unstage(&self, root: &Path, paths: &[&str]) -> Result<(), GitError>;
     fn restore(&self, root: &Path, paths: &[&str]) -> Result<(), GitError>;
@@ -130,6 +147,54 @@ impl<R: Runner> CliGit<R> {
     pub fn repo_root(&self, path: &Path) -> Result<PathBuf, GitError> {
         let output = self.run(path, &["rev-parse", "--show-toplevel"])?;
         Ok(PathBuf::from(output.trim()))
+    }
+
+    /// `grep`'s implementation, with the pathspec argv budget as a parameter
+    /// so tests can force chunking without huge inputs.
+    fn grep_with_budget(
+        &self,
+        cwd: &Path,
+        query: &str,
+        paths: &[String],
+        limit: usize,
+        budget: usize,
+    ) -> Result<(Vec<GrepMatch>, bool), GitError> {
+        let mut matches = Vec::new();
+        for chunk in chunk_paths(paths, budget) {
+            let remaining = limit.saturating_sub(matches.len());
+            if remaining == 0 {
+                return Ok((matches, true));
+            }
+            let max_count = format!("--max-count={remaining}");
+            let refs: Vec<&str> = chunk.iter().map(String::as_str).collect();
+            let args: Vec<&str> = [
+                "grep",
+                "--untracked",
+                "-z",
+                "-n",
+                "-I",
+                "-F",
+                "-i",
+                "--no-color",
+                "--no-column",
+                "--no-full-name",
+                &max_count,
+                "-e",
+                query,
+                "--",
+            ]
+            .into_iter()
+            .chain(refs)
+            .collect();
+            let output = self.runner.run(cwd, &args, &[0, 1])?;
+            let parsed = parse_grep(&output);
+            let hit_limit = parsed.len() >= remaining;
+            matches.extend(parsed.into_iter().take(remaining));
+            if hit_limit {
+                return Ok((matches, true));
+            }
+        }
+        Ok((matches, false))
     }
 }
 
@@ -253,6 +318,16 @@ impl<R: Runner> GitApi for CliGit<R> {
                 self.run(root, &[&["diff"][..], &base, &["--", &file.path]].concat())
             }
         }
+    }
+
+    fn grep(
+        &self,
+        cwd: &Path,
+        query: &str,
+        paths: &[String],
+        limit: usize,
+    ) -> Result<(Vec<GrepMatch>, bool), GitError> {
+        self.grep_with_budget(cwd, query, paths, limit, MAX_ARGV_BYTES)
     }
 
     fn stage(&self, root: &Path, paths: &[&str]) -> Result<(), GitError> {
@@ -404,6 +479,50 @@ fn parse_commits(output: &str) -> Vec<Commit> {
                 .filter(|p| !p.is_empty())
                 .map(str::to_string),
             subject: subject.to_string(),
+        })
+        .collect()
+}
+
+/// Group `paths` into chunks whose total byte length (plus a separator per
+/// path) stays under `budget`; always at least one path per chunk.
+fn chunk_paths(paths: &[String], budget: usize) -> Vec<Vec<String>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut size = 0;
+    for path in paths {
+        let cost = path.len() + 1;
+        if !current.is_empty() && size + cost > budget {
+            chunks.push(std::mem::take(&mut current));
+            size = 0;
+        }
+        size += cost;
+        current.push(path.clone());
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Parse `git grep -z -n` output: records of `path\0line\0text` per line.
+fn parse_grep(output: &str) -> Vec<GrepMatch> {
+    output
+        .lines()
+        .filter_map(|record| {
+            let mut fields = record.splitn(3, '\0');
+            let path = fields.next()?;
+            let line: usize = fields.next()?.parse().ok()?;
+            let text = fields.next().unwrap_or_default();
+            let text = text.trim_start();
+            let text = match text.char_indices().nth(MAX_MATCH_TEXT) {
+                Some((end, _)) => &text[..end],
+                None => text,
+            };
+            Some(GrepMatch {
+                path: path.to_string(),
+                line,
+                text: text.to_string(),
+            })
         })
         .collect()
 }
@@ -960,6 +1079,163 @@ mod tests {
             );
             assert_eq!(calls(&git), [call("/repository", args, &[0])]);
         }
+    }
+
+    fn grep_match(path: &str, line: usize, text: &str) -> GrepMatch {
+        GrepMatch {
+            path: path.to_string(),
+            line,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn grep_builds_argv_and_parses_null_delimited_output() {
+        let git = replying("a.txt\x002\x00  hello world\0still.txt\nb c.txt\x005\x00hi\n");
+        let paths = vec!["a.txt".to_string(), "b c.txt".to_string()];
+
+        let (matches, truncated) = git.grep(root(), "hello", &paths, 50).unwrap();
+
+        assert_eq!(
+            matches,
+            [
+                grep_match("a.txt", 2, "hello world\0still.txt"),
+                grep_match("b c.txt", 5, "hi"),
+            ]
+        );
+        assert!(!truncated);
+        assert_eq!(
+            calls(&git),
+            [call(
+                "/repository",
+                &[
+                    "grep",
+                    "--untracked",
+                    "-z",
+                    "-n",
+                    "-I",
+                    "-F",
+                    "-i",
+                    "--no-color",
+                    "--no-column",
+                    "--no-full-name",
+                    "--max-count=50",
+                    "-e",
+                    "hello",
+                    "--",
+                    "a.txt",
+                    "b c.txt",
+                ],
+                &[0, 1],
+            )]
+        );
+    }
+
+    #[test]
+    fn grep_trims_leading_whitespace_and_caps_match_text() {
+        let long = "x".repeat(250);
+        let output = format!("a.txt\x001\x00   {long}\n");
+        let git = git(move |_| Ok(output.clone()));
+
+        let (matches, _) = git.grep(root(), "x", &["a.txt".to_string()], 10).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text.chars().count(), 200);
+        assert!(!matches[0].text.starts_with(' '));
+    }
+
+    #[test]
+    fn grep_returns_empty_output_as_no_matches() {
+        // Empty stdout is what the real runner returns for the allowed exit
+        // code 1 (no match); `check_output`'s own tests cover that mapping.
+        let git = replying("");
+
+        let (matches, truncated) = git
+            .grep(root(), "nope", &["a.txt".to_string()], 10)
+            .unwrap();
+
+        assert_eq!(matches, []);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn grep_stops_once_the_total_limit_is_reached() {
+        let git = replying("a.txt\x001\x00one\nb.txt\x002\x00two\nc.txt\x003\x00three\n");
+        let paths = vec![
+            "a.txt".to_string(),
+            "b.txt".to_string(),
+            "c.txt".to_string(),
+        ];
+
+        let (matches, truncated) = git.grep(root(), "x", &paths, 2).unwrap();
+
+        assert_eq!(
+            matches,
+            [grep_match("a.txt", 1, "one"), grep_match("b.txt", 2, "two")]
+        );
+        assert!(truncated);
+        // One call only: the single chunk already filled the quota.
+        assert_eq!(calls(&git).len(), 1);
+    }
+
+    #[test]
+    fn grep_requests_the_remaining_count_per_chunk() {
+        let git = CliGit::new(Recording {
+            calls: Mutex::new(Vec::new()),
+            respond: Box::new(|args| {
+                let max_count = args
+                    .iter()
+                    .find_map(|a| a.strip_prefix("--max-count="))
+                    .unwrap();
+                Ok(match max_count {
+                    // The first chunk sees the full limit; after it returns
+                    // one match, the second chunk is asked for one less.
+                    "5" => "a.txt\x001\x00one\n".to_string(),
+                    "4" => "b.txt\x002\x00two\n".to_string(),
+                    other => panic!("unexpected --max-count={other}"),
+                })
+            }),
+        });
+        // A budget of 6 fits one "aN.txt"-shaped path per chunk.
+        let paths = vec!["a.txt".to_string(), "b.txt".to_string()];
+
+        let (matches, truncated) = git.grep_with_budget(root(), "x", &paths, 5, 6).unwrap();
+
+        assert_eq!(
+            matches,
+            [grep_match("a.txt", 1, "one"), grep_match("b.txt", 2, "two")]
+        );
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn grep_chunks_paths_across_several_calls_and_stops_at_the_limit() {
+        let git = CliGit::new(Recording {
+            calls: Mutex::new(Vec::new()),
+            respond: Box::new(|_| Ok("a.txt\x001\x00hit\nb.txt\x002\x00hit\n".to_string())),
+        });
+        // Each path costs 7 bytes ("aN.txt" + separator); a budget of 10
+        // fits exactly one path per chunk, forcing several calls.
+        let paths: Vec<String> = (0..4).map(|i| format!("a{i}.txt")).collect();
+
+        let (matches, truncated) = git.grep_with_budget(root(), "x", &paths, 3, 10).unwrap();
+
+        // The first chunk (one path) already returns 2 matches; the limit of
+        // 3 is reached during the second chunk's single extra match.
+        assert_eq!(matches.len(), 3);
+        assert!(truncated);
+        assert_eq!(calls(&git).len(), 2, "stops before a third chunk runs");
+    }
+
+    #[test]
+    fn grep_sends_no_command_for_an_empty_path_list() {
+        let git = replying("");
+
+        let (matches, truncated) = git.grep(root(), "x", &[], 10).unwrap();
+
+        assert_eq!(matches, []);
+        assert!(!truncated);
+        assert_eq!(calls(&git), []);
     }
 
     type Operation = fn(&CliGit<Recording>, &Path, &[&str]) -> Result<(), GitError>;

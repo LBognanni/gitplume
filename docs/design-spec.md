@@ -9,7 +9,7 @@ leaving the terminal, and stays fast on large files and large diffs.
 ### Screens
 
 ```
- Changes  Files                                       ← tabs
+ Changes  Files  Find                                 ← tabs
  Staged                        ↓│ src/app.rs     ↑ ↓   ← title rows
 ┌─────────────────────────────┐ │   12   12 fn main() {
 │[ ] M src/app.rs             │ │ -   13      old();
@@ -41,6 +41,13 @@ leaving the terminal, and stays fast on large files and large diffs.
 - **Files tab:** a tree of the tracked and non-ignored untracked files below
   the launch directory, and a highlighted preview of the selected file. `t`
   opens a jump-to-file dialog.
+- **Find tab** (Ctrl+F): a Find box and a comma-separated glob Filter box
+  (e.g. `*.rs, src/**`) above a scrollable list of matches, one row per
+  match. The filter is matched in memory against the file list; only the
+  files it selects are ever handed to `git grep`, so a search never opens
+  every file. A search needs at least three characters. Clicking a match, or
+  pressing Enter on the highlighted one, opens it in the shared preview pane
+  scrolled to that line.
 - **Status bar:** the current branch, or the hint for the hovered button.
 - **Modals:** discard confirmation, keyboard shortcuts (shown once on first
   launch), and file jump.
@@ -134,9 +141,9 @@ event goes to the topmost target under the pointer.
   order. A mutation and the status read that follows it run as one job, so
   no other read can interleave.
 - **Latest-only workers:** one thread each for diffs, history, commit files,
-  the file list, and previews. Each skips to the newest queued request, so
-  fast navigation never piles up work. Diff and preview documents, including
-  their tree-sitter parse, are built here.
+  the file list, previews, and find-in-files searches. Each skips to the
+  newest queued request, so fast navigation never piles up work. Diff and
+  preview documents, including their tree-sitter parse, are built here.
 - **Tokens:** every request carries a token. The app drops a result whose
   token is no longer current. Workers are never cancelled, and quitting never
   waits for them.

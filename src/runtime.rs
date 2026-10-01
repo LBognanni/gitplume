@@ -94,6 +94,16 @@ pub fn run_job(git: &dyn GitApi, job: Job) -> Event {
             token,
             doc: load_preview(&path),
         },
+        Job::Grep {
+            cwd,
+            query,
+            paths,
+            limit,
+            token,
+        } => Event::Grep {
+            token,
+            result: git.grep(&cwd, &query, &paths, limit),
+        },
     }
 }
 
@@ -174,6 +184,7 @@ struct Workers {
     commit_files: Sender<Job>,
     files: Sender<Job>,
     preview: Sender<Job>,
+    grep: Sender<Job>,
 }
 
 pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -> io::Result<()> {
@@ -186,7 +197,8 @@ pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -
         history: spawn_latest(git.clone(), tx.clone()),
         commit_files: spawn_latest(git.clone(), tx.clone()),
         files: spawn_latest(git.clone(), tx.clone()),
-        preview: spawn_latest(git, tx),
+        preview: spawn_latest(git.clone(), tx.clone()),
+        grep: spawn_latest(git, tx),
     };
     terminal.draw(|frame| ui::render(&mut app, frame))?;
     if execute(app.start(), &jobs) {
@@ -244,6 +256,9 @@ fn execute(effects: Vec<Effect>, jobs: &Workers) -> bool {
             }
             Effect::Git(job @ Job::Preview { .. }) => {
                 let _ = jobs.preview.send(job);
+            }
+            Effect::Git(job @ Job::Grep { .. }) => {
+                let _ = jobs.grep.send(job);
             }
             Effect::Git(job) => {
                 let _ = jobs.git.send(job);

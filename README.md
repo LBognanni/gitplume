@@ -44,7 +44,10 @@ Run `gitplume` inside a Git repository.
 The **Changes** tab lists staged files, unstaged files, and recent commits.
 Select a file to see its diff, or a commit to see the files it changed. The
 **Files** tab shows the repository below the directory you started in; select
-a file to preview it. Press `h` at any time for the keyboard shortcuts.
+a file to preview it. The **Find** tab searches file contents: type in the
+Find box (at least 3 characters) and optionally a comma-separated Filter of
+glob patterns (e.g. `*.rs, src/**`), then click a result to open that file at
+the matching line. Press `h` at any time for the keyboard shortcuts.
 
 ## Controls
 
@@ -55,9 +58,10 @@ a file to preview it. Press `h` at any time for the keyboard shortcuts.
 | PageUp/PageDown, Home/End | Scroll the focused viewer by a page, or to the top / bottom |
 | Tab / Shift+Tab | Move focus to the next / previous pane |
 | Enter or click | Open a file's diff or preview, or expand / collapse a commit or folder |
-| `1` / `2` or click a tab | Switch to the Changes / Files tab |
+| `1` / `2` / `3` or click a tab | Switch to the Changes / Files / Find tab |
 | `n` / `p` or click `↓` / `↑` above the diff | Next / previous change |
 | `t` | Jump to a file by name (Files tab) |
+| Ctrl+F | Find in files |
 | Space or click `[ ]` | Check or uncheck a file for a bulk action |
 | `s` | Stage or unstage the focused file |
 | `d` | Discard the focused unstaged file, after confirmation |

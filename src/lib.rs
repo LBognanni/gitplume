@@ -2,6 +2,7 @@ pub mod app;
 pub mod code_view;
 pub mod diff;
 pub mod document;
+pub mod find;
 pub mod git;
 pub mod highlight;
 pub mod icons;

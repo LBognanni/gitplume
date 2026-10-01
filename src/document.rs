@@ -72,6 +72,13 @@ impl Document {
         self.changes.first().copied()
     }
 
+    /// Highlight row `index`, if it exists, as the target of a find-in-files jump.
+    pub fn mark_row(&mut self, index: usize) {
+        if let Some(row) = self.rows.get_mut(index) {
+            row.background = Some(theme::FOCUSED_SELECTION);
+        }
+    }
+
     /// Render one row, highlighting only that row's source line.
     pub fn line(&self, index: usize) -> Line<'static> {
         let row = &self.rows[index];

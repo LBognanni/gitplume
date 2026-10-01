@@ -13,7 +13,7 @@ use crossterm::event::{
 };
 use gitplume::app::{App, Effect, Event, Job};
 use gitplume::git::{GitApi, GitError};
-use gitplume::model::{Commit, CommitFile, DiffEntry, FileEntry, RepoState, Side};
+use gitplume::model::{Commit, CommitFile, DiffEntry, FileEntry, GrepMatch, RepoState, Side};
 use gitplume::{runtime, ui};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -63,6 +63,10 @@ pub struct FakeGit {
     pub commit_files: Mutex<HashMap<String, Vec<CommitFile>>>,
     /// Paths listed by `files`, relative to the launch directory.
     pub files: Mutex<Result<Vec<String>, GitError>>,
+    /// The full set of matches `grep` filters by path and query.
+    pub grep_matches: Mutex<Vec<GrepMatch>>,
+    /// When set, every `grep` call fails with this error.
+    pub grep_error: Mutex<Option<GitError>>,
     pub calls: Mutex<Vec<String>>,
     gate: Option<Gate>,
 }
@@ -76,6 +80,8 @@ impl FakeGit {
             commits: Mutex::new(Ok(Vec::new())),
             commit_files: Mutex::new(HashMap::new()),
             files: Mutex::new(Ok(Vec::new())),
+            grep_matches: Mutex::new(Vec::new()),
+            grep_error: Mutex::new(None),
             calls: Mutex::new(Vec::new()),
             gate: None,
         }
@@ -130,6 +136,29 @@ impl GitApi for FakeGit {
     fn files(&self, cwd: &Path) -> Result<Vec<String>, GitError> {
         self.record(format!("files {}", cwd.display()));
         self.files.lock().unwrap().clone()
+    }
+    fn grep(
+        &self,
+        _: &Path,
+        query: &str,
+        paths: &[String],
+        limit: usize,
+    ) -> Result<(Vec<GrepMatch>, bool), GitError> {
+        self.record(format!("grep {query} {}", paths.join(" ")));
+        if let Some(error) = self.grep_error.lock().unwrap().clone() {
+            return Err(error);
+        }
+        let needle = query.to_lowercase();
+        let all: Vec<GrepMatch> = self
+            .grep_matches
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| paths.contains(&m.path) && m.text.to_lowercase().contains(&needle))
+            .cloned()
+            .collect();
+        let truncated = all.len() > limit;
+        Ok((all.into_iter().take(limit).collect(), truncated))
     }
     fn commits(&self, _: &Path) -> Result<Vec<Commit>, GitError> {
         self.commits.lock().unwrap().clone()
@@ -257,7 +286,9 @@ impl Harness {
                 {
                     self.held_history.push_back(job)
                 }
-                Effect::Git(job @ (Job::Files { .. } | Job::Preview { .. })) if self.hold_files => {
+                Effect::Git(job @ (Job::Files { .. } | Job::Preview { .. } | Job::Grep { .. }))
+                    if self.hold_files =>
+                {
                     self.held_files.push_back(job)
                 }
                 Effect::Git(job)
@@ -268,6 +299,7 @@ impl Harness {
                                 | Job::CommitFiles { .. }
                                 | Job::Files { .. }
                                 | Job::Preview { .. }
+                                | Job::Grep { .. }
                         ) =>
                 {
                     self.held.push_back(job)
