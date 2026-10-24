@@ -3,6 +3,8 @@
 - Use `uv` instead of raw python
 - ruthlessly apply the KISS principle: keep it simple, avoid unnecessary complexity, and focus on the core functionality.
 - use gitmoji when committing
+- Run all operations involving the Rust toolchain (including builds, tests, formatting, and Clippy) inside the project's `.devcontainer`. If not already running inside the devcontainer, execute those commands in it rather than using or installing a local Rust toolchain.
+- Always run `cargo build --release` inside the project's `.devcontainer` after completing a change, before reporting it as done.
 
 ## Testing
 

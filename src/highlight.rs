@@ -30,15 +30,29 @@ pub enum Lang {
     Markdown,
     Sql,
     Lua,
+    Hcl,
+    Dockerfile,
+    Xml,
+    Zig,
+    Glsl,
+    PowerShell,
 }
 
-const LANG_COUNT: usize = Lang::Lua as usize + 1;
+const LANG_COUNT: usize = Lang::PowerShell as usize + 1;
 
 impl Lang {
     fn from_name(name: &str) -> Option<Self> {
+        if name == "dockerfile"
+            || name.starts_with("dockerfile.")
+            || name == "containerfile"
+            || name.starts_with("containerfile.")
+        {
+            return Some(Self::Dockerfile);
+        }
         Some(match name {
             "gemfile" | "rakefile" => Self::Ruby,
-            ".bashrc" | ".zshrc" | ".profile" | "pkgbuild" => Self::Bash,
+            ".bashrc" | ".bash_profile" | ".bash_login" | ".bash_logout" | ".zshrc" | ".zshenv"
+            | ".zprofile" | ".zlogin" | ".zlogout" | ".profile" | "pkgbuild" => Self::Bash,
             "cargo.lock" | "uv.lock" => Self::Toml,
             _ => return None,
         })
@@ -68,6 +82,12 @@ impl Lang {
             "md" | "markdown" => Self::Markdown,
             "sql" => Self::Sql,
             "lua" => Self::Lua,
+            "tf" | "tfvars" | "hcl" => Self::Hcl,
+            "dockerfile" | "containerfile" => Self::Dockerfile,
+            "xml" | "xsd" | "xsl" | "xslt" | "svg" | "plist" => Self::Xml,
+            "zig" | "zon" => Self::Zig,
+            "glsl" | "vert" | "frag" | "geom" | "tesc" | "tese" | "comp" => Self::Glsl,
+            "ps1" | "psm1" | "psd1" => Self::PowerShell,
             _ => return None,
         })
     }
@@ -83,6 +103,7 @@ impl Lang {
             "node" => Some(Self::JavaScript),
             "ruby" => Some(Self::Ruby),
             "sh" | "bash" | "zsh" => Some(Self::Bash),
+            "pwsh" | "powershell" => Some(Self::PowerShell),
             _ => None,
         }
     }
@@ -184,6 +205,33 @@ impl Lang {
             Self::Lua => (
                 tree_sitter_lua::LANGUAGE.into(),
                 vec![tree_sitter_lua::HIGHLIGHTS_QUERY],
+            ),
+            Self::Hcl => (
+                tree_sitter_hcl::LANGUAGE.into(),
+                vec![include_str!("queries/hcl.scm")],
+            ),
+            Self::Dockerfile => (
+                tree_sitter_containerfile::LANGUAGE.into(),
+                vec![tree_sitter_containerfile::HIGHLIGHTS_QUERY],
+            ),
+            Self::Xml => (
+                tree_sitter_xml::LANGUAGE_XML.into(),
+                vec![tree_sitter_xml::XML_HIGHLIGHT_QUERY],
+            ),
+            Self::Zig => (
+                tree_sitter_zig::LANGUAGE.into(),
+                vec![tree_sitter_zig::HIGHLIGHTS_QUERY],
+            ),
+            Self::Glsl => (
+                tree_sitter_glsl::LANGUAGE_GLSL.into(),
+                vec![
+                    tree_sitter_c::HIGHLIGHT_QUERY,
+                    tree_sitter_glsl::HIGHLIGHTS_QUERY,
+                ],
+            ),
+            Self::PowerShell => (
+                tree_sitter_powershell::LANGUAGE.into(),
+                vec![tree_sitter_powershell::HIGHLIGHTS_QUERY],
             ),
         }
     }
@@ -360,6 +408,12 @@ mod tests {
         Lang::Markdown,
         Lang::Sql,
         Lang::Lua,
+        Lang::Hcl,
+        Lang::Dockerfile,
+        Lang::Xml,
+        Lang::Zig,
+        Lang::Glsl,
+        Lang::PowerShell,
     ];
 
     #[test]
@@ -369,6 +423,66 @@ mod tests {
             .filter(|lang| lang.grammar().is_none())
             .collect();
         assert_eq!(broken, []);
+    }
+
+    #[test]
+    fn detects_infrastructure_shader_and_shell_files() {
+        for (path, lang) in [
+            ("infra/main.tf", Lang::Hcl),
+            ("terraform.tfvars", Lang::Hcl),
+            ("terragrunt.hcl", Lang::Hcl),
+            ("Dockerfile", Lang::Dockerfile),
+            ("build/Dockerfile.dev", Lang::Dockerfile),
+            ("Containerfile", Lang::Dockerfile),
+            ("Containerfile.dev", Lang::Dockerfile),
+            ("build/app.dockerfile", Lang::Dockerfile),
+            ("build/app.containerfile", Lang::Dockerfile),
+            ("config.XML", Lang::Xml),
+            ("schema.xsd", Lang::Xml),
+            ("style.xsl", Lang::Xml),
+            ("style.xslt", Lang::Xml),
+            ("icon.svg", Lang::Xml),
+            ("Info.plist", Lang::Xml),
+            ("src/main.zig", Lang::Zig),
+            ("build.zig.zon", Lang::Zig),
+            ("shader.glsl", Lang::Glsl),
+            ("shader.vert", Lang::Glsl),
+            ("shader.frag", Lang::Glsl),
+            ("shader.geom", Lang::Glsl),
+            ("shader.tesc", Lang::Glsl),
+            ("shader.tese", Lang::Glsl),
+            ("shader.comp", Lang::Glsl),
+            ("script.ps1", Lang::PowerShell),
+            ("module.psm1", Lang::PowerShell),
+            ("module.psd1", Lang::PowerShell),
+            ("script.sh", Lang::Bash),
+            ("script.bash", Lang::Bash),
+            ("script.zsh", Lang::Bash),
+            (".bash_profile", Lang::Bash),
+            (".bash_login", Lang::Bash),
+            (".bash_logout", Lang::Bash),
+            (".zshenv", Lang::Bash),
+            (".zprofile", Lang::Bash),
+            (".zlogin", Lang::Bash),
+            (".zlogout", Lang::Bash),
+        ] {
+            assert_eq!(detect(path, ""), Some(lang), "{path}");
+        }
+        for (shebang, lang) in [
+            ("#!/bin/zsh", Lang::Bash),
+            ("#!/usr/bin/env bash", Lang::Bash),
+            ("#!/usr/bin/env -S zsh -e", Lang::Bash),
+            ("#!/usr/bin/pwsh", Lang::PowerShell),
+            ("#!/usr/bin/env pwsh", Lang::PowerShell),
+            ("#!/usr/bin/env powershell", Lang::PowerShell),
+        ] {
+            assert_eq!(detect("bin/script", shebang), Some(lang), "{shebang}");
+        }
+        assert_eq!(detect("main.tf.json", ""), Some(Lang::Json));
+        assert_eq!(detect("terraform.tfvars.json", ""), Some(Lang::Json));
+        assert_eq!(detect("Dockerfile.txt", ""), Some(Lang::Dockerfile));
+        assert_eq!(detect("dockerfiles.txt", ""), None);
+        assert_eq!(detect("script.ps1", "#!/bin/bash"), Some(Lang::PowerShell));
     }
 
     #[test]

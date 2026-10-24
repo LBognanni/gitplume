@@ -5,7 +5,7 @@ changed, read it as a syntax-highlighted diff with the whole file around it,
 and stage or discard it, without leaving the terminal.
 
 - **Full-context diffs**: every change is shown inside the complete file,
-  highlighted for 20 languages, and `n` / `p` jump between changes.
+  highlighted for a wide range of languages, and `n` / `p` jump between changes.
 - **Stage, unstage, or discard** whole files, one at a time or checked in bulk.
   Discarding always asks first.
 - **History**: browse the last 100 commits on your branch and open the diff of

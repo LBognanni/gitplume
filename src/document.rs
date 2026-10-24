@@ -314,6 +314,43 @@ index 1111111..2222222 100644
     }
 
     #[test]
+    fn added_languages_render_highlighted_source_on_both_diff_sides() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::Paragraph;
+
+        for (path, source, token) in [
+            (
+                "main.tf",
+                "resource \"null_resource\" \"example\" { count = 2 }",
+                "resource",
+            ),
+            ("values.tfvars", "name = \"example\"", "example"),
+            ("Dockerfile", "FROM alpine:3.20", "FROM"),
+            ("config.xml", "<note value=\"hello\"/>", "note"),
+            ("main.zig", "const message = \"hello\";", "const"),
+            ("shader.frag", "uniform float amount;", "float"),
+            ("script.ps1", "Write-Output \"hello\"", "hello"),
+            ("script.bash", "echo \"hello\"", "hello"),
+            ("script.zsh", "echo \"hello\"", "hello"),
+        ] {
+            let doc = diff_document(path, &hunk(&format!("-{source}\n+{source}\n")));
+            let mut terminal = Terminal::new(TestBackend::new(100, 2)).unwrap();
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(Paragraph::new(lines(&doc)), frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let x = (GUTTER_WIDTH + source.find(token).unwrap()) as u16;
+            for y in 0..2 {
+                assert_ne!(buffer[(x, y)].fg, buffer[(0, y)].fg, "{path}, row {y}");
+            }
+            assert_eq!(buffer[(x, 0)].fg, buffer[(x, 1)].fg, "{path}");
+        }
+    }
+
+    #[test]
     fn diff_document_prepares_visible_rows_and_change_positions() {
         let doc = diff_document("module.py", PATCH);
 
