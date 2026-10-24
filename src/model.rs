@@ -12,6 +12,8 @@ pub struct FileEntry {
     pub side: Side,
     pub status: char,
     pub unsupported_reason: Option<String>,
+    pub additions: usize,
+    pub removals: usize,
 }
 
 impl FileEntry {
@@ -21,6 +23,8 @@ impl FileEntry {
             side,
             status,
             unsupported_reason: None,
+            additions: 0,
+            removals: 0,
         }
     }
 

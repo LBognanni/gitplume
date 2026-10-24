@@ -217,7 +217,40 @@ impl<R: Runner> GitApi for CliGit<R> {
                 "--untracked-files=all",
             ],
         )?;
-        Ok(parse_status(&output, root))
+        let mut state = parse_status(&output, root);
+        for entries in [&mut state.staged, &mut state.unstaged] {
+            if entries.iter().any(|entry| entry.status != '?') {
+                let mut args = vec!["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv"];
+                if entries[0].side == Side::Staged {
+                    args.push("--cached");
+                }
+                args.push("--");
+                let output = self.run(root, &args)?;
+                apply_numstat(&output, entries);
+            }
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| entry.status == '?' && entry.unsupported_reason.is_none())
+            {
+                let output = self.runner.run(
+                    root,
+                    &[
+                        "diff",
+                        "--no-index",
+                        "--numstat",
+                        "-z",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--",
+                        "/dev/null",
+                        &entry.path,
+                    ],
+                    &[0, 1],
+                )?;
+                apply_numstat(&output, std::slice::from_mut(entry));
+            }
+        }
+        Ok(state)
     }
 
     fn files(&self, cwd: &Path) -> Result<Vec<String>, GitError> {
@@ -534,6 +567,29 @@ fn parse_grep(output: &str) -> Vec<GrepMatch> {
         .collect()
 }
 
+/// Apply NUL-delimited numstat records, including rename records with two paths.
+fn apply_numstat(output: &str, entries: &mut [FileEntry]) {
+    let mut records = output.split('\0');
+    while let Some(record) = records.next() {
+        let mut fields = record.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let path = if path.is_empty() {
+            let _old_path = records.next();
+            records.next().unwrap_or_default()
+        } else {
+            path
+        };
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.path == path) {
+            entry.additions = added.parse().unwrap_or(0);
+            entry.removals = removed.parse().unwrap_or(0);
+        }
+    }
+}
+
 fn parse_commit_files(output: &str, commit: &Commit) -> Vec<CommitFile> {
     let fields: Vec<&str> = output.split('\0').collect();
     fields
@@ -756,6 +812,94 @@ mod tests {
         ] {
             assert_eq!(parse_status(output, root()).branch, expected);
         }
+    }
+
+    #[test]
+    fn status_loads_line_counts_for_both_sides_and_untracked_files() {
+        let git = git(|args| {
+            Ok(if args[0] == "status" {
+                "1 MM N... 100644 100644 100644 hash hash tracked.txt\0? new\tfile.txt\0"
+            } else if args.contains(&"--cached") {
+                "3\t2\ttracked.txt\0"
+            } else if args.contains(&"--no-index") {
+                "5\t0\tnew\tfile.txt\0"
+            } else {
+                "1\t4\ttracked.txt\0"
+            }
+            .into())
+        });
+        let state = git.status(root()).unwrap();
+        assert_eq!(
+            (state.staged[0].additions, state.staged[0].removals),
+            (3, 2)
+        );
+        assert_eq!(
+            (state.unstaged[0].additions, state.unstaged[0].removals),
+            (1, 4)
+        );
+        assert_eq!(
+            (state.unstaged[1].additions, state.unstaged[1].removals),
+            (5, 0)
+        );
+        assert_eq!(
+            calls(&git)[1..],
+            [
+                call(
+                    "/repository",
+                    &[
+                        "diff",
+                        "--numstat",
+                        "-z",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--cached",
+                        "--"
+                    ],
+                    &[0]
+                ),
+                call(
+                    "/repository",
+                    &[
+                        "diff",
+                        "--numstat",
+                        "-z",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--"
+                    ],
+                    &[0]
+                ),
+                call(
+                    "/repository",
+                    &[
+                        "diff",
+                        "--no-index",
+                        "--numstat",
+                        "-z",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--",
+                        "/dev/null",
+                        "new\tfile.txt"
+                    ],
+                    &[0, 1]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn numstat_handles_binary_files_and_renamed_paths() {
+        let mut entries = vec![
+            staged("binary", 'M'),
+            staged("new\nname", 'R'),
+            staged("text", 'M'),
+        ];
+        apply_numstat("-\t-\tbinary\0", &mut entries);
+        apply_numstat("7\t3\t\0old name\0new\nname\x002\t1\ttext\0", &mut entries);
+        assert_eq!((entries[0].additions, entries[0].removals), (0, 0));
+        assert_eq!((entries[1].additions, entries[1].removals), (7, 3));
+        assert_eq!((entries[2].additions, entries[2].removals), (2, 1));
     }
 
     #[test]

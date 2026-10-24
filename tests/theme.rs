@@ -38,6 +38,36 @@ fn background(harness: &Harness, (x, y): (u16, u16)) -> Color {
 }
 
 #[test]
+fn status_headers_show_combined_line_counts_only_for_nonempty_sections() {
+    let mut repo = state(&["a", "b"], &["c"]);
+    repo.staged[0].additions = 3;
+    repo.staged[0].removals = 1;
+    repo.staged[1].additions = 2;
+    repo.staged[1].removals = 4;
+    repo.unstaged[0].additions = 7;
+    let mut harness = Harness::new(Ok(repo));
+    for (title, counts) in [("Staged", "+5, -5"), ("Unstaged", "+7, -0")] {
+        let (_, y) = harness.at(title);
+        assert!(harness.line(y).contains(counts));
+        let (x, _) = harness.at(counts);
+        let added = harness.buffer()[(x, y)].fg;
+        let removed = harness.buffer()[(x + 4, y)].fg;
+        let plain = harness.buffer()[(x + 3, y)].fg;
+        assert_ne!(added, removed);
+        assert_ne!(added, plain);
+        assert_ne!(removed, plain);
+    }
+    harness.press(KeyCode::Char(' '));
+    assert!(harness.line(harness.at("Staged").1).contains("+5, -5"));
+    *harness.git.status.lock().unwrap() = Ok(state(&[], &[]));
+    harness.press(KeyCode::Char('r'));
+    for title in ["Staged", "Unstaged"] {
+        let line = harness.line(harness.at(title).1);
+        assert!(!line.contains("+0, -0"));
+    }
+}
+
+#[test]
 fn surfaces_and_text_are_readable() {
     let mut harness = Harness::new(Ok(state(&[], &["file0.txt", "file1.txt"])));
     let row = harness.at("file0.txt");

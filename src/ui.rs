@@ -431,7 +431,13 @@ fn status_section(app: &mut App, area: Rect, side: Side, buf: &mut Buffer) {
     } else {
         &[]
     };
-    viewer_title(app, title_row, title, buttons, None, buf);
+    let entries = &app.list(side).entries;
+    let counts = (!app.status_loading && !entries.is_empty()).then(|| {
+        entries.iter().fold((0, 0), |(added, removed), entry| {
+            (added + entry.additions, removed + entry.removals)
+        })
+    });
+    viewer_title(app, title_row, title, buttons, counts, buf);
     let focused = app.focus == focus;
     let loading = app.status_loading;
     bordered_list(loading.then(loading_line).into_iter().collect(), list, buf);
