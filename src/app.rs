@@ -604,6 +604,7 @@ pub enum Job {
 
 #[derive(Debug)]
 pub enum Event {
+    EditorClosed(Result<(), String>),
     Input(Input),
     /// The clock reached `Instant`; expires toasts.
     Tick(Instant),
@@ -655,6 +656,8 @@ pub enum Event {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
     Quit,
+    /// Temporarily hand the terminal to an external editor.
+    Edit(PathBuf),
     Git(Job),
     /// Copy text to the system clipboard.
     Copy(String),
@@ -733,6 +736,7 @@ pub struct App {
     pub jump_rows: usize,
     preview_token: u64,
     pub preview_loading: bool,
+    preview_path: Option<PathBuf>,
     /// The line a find-in-files match asked the preview to jump to.
     preview_line: Option<usize>,
     pub find: FindState,
@@ -802,6 +806,7 @@ impl App {
             jump_rows: 0,
             preview_token: 0,
             preview_loading: false,
+            preview_path: None,
             preview_line: None,
             find: FindState::default(),
             find_token: 0,
@@ -861,6 +866,7 @@ impl App {
 
     /// Clear the preview title and document and drop pending previews.
     fn clear_preview(&mut self) {
+        self.preview_path = None;
         self.preview_token += 1;
         self.preview_loading = false;
         self.preview_line = None;
@@ -908,6 +914,7 @@ impl App {
             return Vec::new();
         }
         let path = self.cwd.join(&node.path);
+        self.preview_path = Some(path.clone());
         self.preview_title = path
             .strip_prefix(&self.root)
             .unwrap_or(&path)
@@ -925,6 +932,7 @@ impl App {
     /// Open a find-in-files match in the preview, scrolled to its line.
     fn open_match(&mut self, found: GrepMatch) -> Vec<Effect> {
         let path = self.cwd.join(&found.path);
+        self.preview_path = Some(path.clone());
         self.preview_title = path
             .strip_prefix(&self.root)
             .unwrap_or(&path)
@@ -1423,6 +1431,33 @@ impl App {
 
     fn handle(&mut self, event: Event) -> Vec<Effect> {
         match event {
+            Event::EditorClosed(result) => {
+                if let Err(error) = result {
+                    self.notify(Some("Could not edit file"), &error, Severity::Error);
+                }
+                let Some(path) = self.preview_path.clone() else {
+                    return Vec::new();
+                };
+                self.preview_token += 1;
+                self.preview_loading = true;
+                let mut effects = vec![Effect::Git(Job::Preview {
+                    path: path.clone(),
+                    token: self.preview_token,
+                })];
+                effects.extend(self.refresh_files_quiet());
+                self.merge_pending(Invalidation {
+                    status: true,
+                    changed_paths: [path
+                        .strip_prefix(&self.root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned()]
+                    .into_iter()
+                    .collect(),
+                    ..Invalidation::default()
+                });
+                return effects;
+            }
             Event::Input(Input::Key(key)) if key.kind != KeyEventKind::Release => {
                 return self.key(key);
             }
@@ -1763,7 +1798,10 @@ impl App {
         }
         match &mut self.modal {
             Some(Modal::Shortcuts) => {
-                if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('h')) {
+                if matches!(
+                    key.code,
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('h' | '?') | KeyCode::F(1)
+                ) {
                     self.modal = None;
                 }
                 return Vec::new();
@@ -1784,6 +1822,10 @@ impl App {
             }
             Some(Modal::FileJump { .. }) => return self.jump_key(key.code),
             None => {}
+        }
+        if key.code == KeyCode::F(1) {
+            self.modal = Some(Modal::Shortcuts);
+            return Vec::new();
         }
         if matches!(self.focus, Focus::FindQuery | Focus::FindFilter) {
             return self.find_box_key(key);
@@ -1863,6 +1905,20 @@ impl App {
             return self.files_key(key.code);
         }
         match key.code {
+            KeyCode::Char('e')
+                if self.tab == Tab::Files
+                    && !self.preview_loading
+                    && !self.files_tree_loading
+                    && key.kind == KeyEventKind::Press
+                    && (key.modifiers - KeyModifiers::SHIFT).is_empty() =>
+            {
+                return self
+                    .preview_path
+                    .clone()
+                    .map(Effect::Edit)
+                    .into_iter()
+                    .collect();
+            }
             KeyCode::Char('q') => return vec![Effect::Quit],
             KeyCode::Char('r') => return self.refresh_all(),
             KeyCode::Char('t') if self.tab == Tab::Files && !self.files_tree_loading => {
@@ -1872,7 +1928,7 @@ impl App {
                 });
                 self.jump_offset = 0;
             }
-            KeyCode::Char('h') => self.modal = Some(Modal::Shortcuts),
+            KeyCode::Char('h' | '?') => self.modal = Some(Modal::Shortcuts),
             KeyCode::Char('1') => return self.show_tab(Tab::Changes),
             KeyCode::Char('2') => return self.show_tab(Tab::Files),
             KeyCode::Char('3') => return self.show_tab(Tab::Find),

@@ -47,7 +47,7 @@ Select a file to see its diff, or a commit to see the files it changed. The
 a file to preview it. The **Find** tab searches file contents: type in the
 Find box (at least 3 characters) and optionally a comma-separated Filter of
 glob patterns (e.g. `*.rs, src/**`), then click a result to open that file at
-the matching line. Press `h` at any time for the keyboard shortcuts.
+the matching line. Press `h`, `?`, or `F1` for the keyboard shortcuts.
 
 ## Controls
 
@@ -61,6 +61,7 @@ the matching line. Press `h` at any time for the keyboard shortcuts.
 | `1` / `2` / `3` or click a tab | Switch to the Changes / Files / Find tab |
 | `n` / `p` or click `↓` / `↑` above the diff | Next / previous change |
 | `t` | Jump to a file by name (Files tab) |
+| `e` | Edit the open file in an external editor (Files tab only) |
 | Ctrl+F | Find in files |
 | Space or click `[ ]` | Check or uncheck a file for a bulk action |
 | `s` | Stage or unstage the focused file |
@@ -72,8 +73,24 @@ the matching line. Press `h` at any time for the keyboard shortcuts.
 | Mouse wheel (Shift for sideways) | Scroll the list or viewer under the pointer |
 | `r` | Refresh everything, including the Files tab |
 | `w` | Toggle line wrapping |
-| `h` / Esc | Show the shortcuts / close a popup |
+| `h` / `?` / F1 | Show or close the keyboard shortcuts |
+| Esc | Close a popup |
 | `q` or Ctrl+C | Quit |
+
+## External editor
+
+In the Files tab, open a file and press `e` to edit it in `nano`.
+Gitplume hands over the whole terminal and returns when the editor exits,
+then reloads the preview. Set `GITPLUME_EDITOR` to choose a different command:
+
+```bash
+GITPLUME_EDITOR='nvim' gitplume
+GITPLUME_EDITOR='code --wait' gitplume
+```
+
+Quoted command arguments are supported; shell expansions and operators are not.
+The file path is appended as a separate argument. GUI editors need their wait
+option so gitplume resumes only after editing is finished.
 
 ## Limitations
 

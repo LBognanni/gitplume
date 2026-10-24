@@ -281,6 +281,7 @@ impl Harness {
             match effect {
                 Effect::Quit => self.quit = true,
                 Effect::Copy(text) => self.copied.push(text),
+                Effect::Edit(_) => panic!("external editor effects must be handled by the test"),
                 Effect::Git(job @ (Job::History { .. } | Job::CommitFiles { .. }))
                     if self.hold_history =>
                 {

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::DefaultTerminal;
 
@@ -138,17 +138,6 @@ fn mutate(
     }
 }
 
-/// Forwards terminal input to the event channel until the receiver is gone.
-fn spawn_input(tx: Sender<Event>) {
-    thread::spawn(move || {
-        while let Ok(input) = crossterm::event::read() {
-            if tx.send(Event::Input(input)).is_err() {
-                break;
-            }
-        }
-    });
-}
-
 /// The FIFO Git queue: runs jobs in order on one thread and posts their results.
 pub fn spawn_git(git: Arc<dyn GitApi>, tx: Sender<Event>) -> Sender<Job> {
     let (jobs, rx) = mpsc::channel::<Job>();
@@ -189,7 +178,6 @@ struct Workers {
 
 pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -> io::Result<()> {
     let (tx, rx) = mpsc::channel();
-    spawn_input(tx.clone());
     watcher::spawn(git.clone(), app.root.clone(), tx.clone());
     let jobs = Workers {
         git: spawn_git(git.clone(), tx.clone()),
@@ -201,24 +189,36 @@ pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -
         grep: spawn_latest(git, tx),
     };
     terminal.draw(|frame| ui::render(&mut app, frame))?;
-    if execute(app.start(), &jobs) {
+    if execute(app.start(), &jobs, &mut app, terminal)? {
         return Ok(());
     }
     loop {
-        let first = match app.deadline() {
-            Some(deadline) => {
-                match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                    Ok(event) => event,
-                    Err(RecvTimeoutError::Timeout) => Event::Tick(Instant::now()),
-                    Err(RecvTimeoutError::Disconnected) => return Ok(()),
-                }
-            }
-            None => match rx.recv() {
+        // Only this thread reads input. During an editor handoff nothing in
+        // gitplume can consume the editor's keyboard input.
+        let first = if crossterm::event::poll(Duration::ZERO)? {
+            Event::Input(crossterm::event::read()?)
+        } else {
+            let wait = app
+                .deadline()
+                .map_or(Duration::from_millis(20), |deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(20))
+                });
+            match rx.recv_timeout(wait) {
                 Ok(event) => event,
-                Err(_) => return Ok(()),
-            },
+                Err(RecvTimeoutError::Timeout) => {
+                    let now = Instant::now();
+                    if app.deadline().is_some_and(|deadline| deadline <= now) {
+                        Event::Tick(now)
+                    } else {
+                        continue;
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            }
         };
-        if apply(&mut app, first, &rx, &jobs) {
+        if apply(&mut app, first, &rx, &jobs, terminal)? {
             return Ok(());
         }
         terminal.draw(|frame| ui::render(&mut app, frame))?;
@@ -226,22 +226,40 @@ pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -
 }
 
 /// Applies `first` and every queued event; returns true when the app should quit.
-fn apply(app: &mut App, first: Event, rx: &Receiver<Event>, jobs: &Workers) -> bool {
+fn apply(
+    app: &mut App,
+    first: Event,
+    rx: &Receiver<Event>,
+    jobs: &Workers,
+    terminal: &mut DefaultTerminal,
+) -> io::Result<bool> {
     for event in std::iter::once(first).chain(rx.try_iter()) {
-        if execute(app.update(event), jobs) {
-            return true;
+        if execute(app.update(event), jobs, app, terminal)? {
+            return Ok(true);
         }
     }
     // Continuous input never times out the wait, so expire toasts here too.
     app.expire_due(Instant::now());
-    false
+    Ok(false)
 }
 
 /// Executes effects; returns true when one of them is `Quit`.
-fn execute(effects: Vec<Effect>, jobs: &Workers) -> bool {
+fn execute(
+    effects: Vec<Effect>,
+    jobs: &Workers,
+    app: &mut App,
+    terminal: &mut DefaultTerminal,
+) -> io::Result<bool> {
     for effect in effects {
         match effect {
-            Effect::Quit => return true,
+            Effect::Quit => return Ok(true),
+            Effect::Edit(path) => {
+                let result = crate::editor::open(terminal, &path, &app.cwd)?;
+                let effects = app.update(Event::EditorClosed(result));
+                if execute(effects, jobs, app, terminal)? {
+                    return Ok(true);
+                }
+            }
             Effect::Git(job @ Job::Diff { .. }) => {
                 let _ = jobs.diff.send(job);
             }
@@ -271,7 +289,7 @@ fn execute(effects: Vec<Effect>, jobs: &Workers) -> bool {
             }
         }
     }
-    false
+    Ok(false)
 }
 
 /// Standard base64 with padding.

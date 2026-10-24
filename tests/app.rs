@@ -209,12 +209,7 @@ fn shortcut_popup_opens_on_first_launch_and_with_h() {
     let screen = harness.screen();
     assert!(screen.contains("Mouse controls are supported throughout."));
     assert!(screen.contains("s           Stage or unstage"));
-    // The dialog is 60 columns wide, border included.
-    let (x, y) = harness.at("Keyboard Shortcuts");
-    let top: Vec<char> = harness.line(y - 2).chars().collect();
-    let left = top[..x as usize].iter().rposition(|c| *c == '┌').unwrap();
-    let right = left + top[left..].iter().position(|c| *c == '┐').unwrap();
-    assert_eq!(right - left + 1, 60);
+    assert!(screen.contains("e           Edit the open file externally (Files tab)"));
 
     harness.press(KeyCode::Char('h'));
     assert!(!shortcuts_open(&harness));
@@ -228,6 +223,30 @@ fn shortcut_popup_opens_on_first_launch_and_with_h() {
     harness.press(KeyCode::Char('h'));
     harness.click(harness.at("Close"));
     assert!(!shortcuts_open(&harness));
+}
+
+#[test]
+fn help_aliases_toggle_shortcuts_and_f1_works_in_search_fields() {
+    let mut harness = Harness::with(Ok(state(&[], &[])), false, 100, 50);
+    for key in [KeyCode::Char('h'), KeyCode::Char('?'), KeyCode::F(1)] {
+        harness.press(key);
+        assert!(shortcuts_open(&harness));
+        for line in gitplume::ui::SHORTCUTS
+            .lines()
+            .filter(|line| !line.is_empty())
+        {
+            assert!(harness.screen().contains(line), "help line clipped: {line}");
+        }
+        harness.press(key);
+        assert!(!shortcuts_open(&harness));
+    }
+    harness.press_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    harness.press(KeyCode::F(1));
+    assert!(shortcuts_open(&harness));
+    harness.press(KeyCode::Esc);
+    harness.press(KeyCode::Char('?'));
+    assert!(!shortcuts_open(&harness));
+    assert!(harness.screen().contains('?'));
 }
 
 #[test]

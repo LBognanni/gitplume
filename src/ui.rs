@@ -17,7 +17,6 @@ use crate::theme;
 use unicode_width::UnicodeWidthStr;
 
 const TOAST_WIDTH: u16 = 50;
-const SHORTCUTS_WIDTH: u16 = 60;
 const DISCARD_WIDTH: u16 = 60;
 const JUMP_WIDTH: u16 = 70;
 
@@ -32,6 +31,7 @@ Navigation
   Ctrl+F      Find in files
 
 File actions
+  e           Edit the open file externally (Files tab)
   Space       Check or uncheck a file
   s           Stage or unstage the focused file
   d           Discard the focused unstaged file
@@ -39,7 +39,7 @@ File actions
 Application
   r           Refresh repository views
   w           Toggle line wrapping
-  h           Show or close this help
+  h / ? / F1  Show or close this help
   q           Quit";
 
 pub fn render(app: &mut App, frame: &mut Frame) {
@@ -955,7 +955,14 @@ fn render_shortcuts(app: &mut App, area: Rect, buf: &mut Buffer) {
     let lines = SHORTCUTS.lines().count() as u16;
     // Border, padding, title, margins, and the Close button around the text.
     let height = lines + 10;
-    let dialog = centered(area, SHORTCUTS_WIDTH.min(area.width * 9 / 10), height);
+    // Two border cells and two padding cells on each side of the longest line.
+    let width = SHORTCUTS
+        .lines()
+        .map(UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0) as u16
+        + 6;
+    let dialog = centered(area, width.min(area.width * 9 / 10), height);
     Clear.render(dialog, buf);
     let block = Block::bordered()
         .border_style(Style::new().fg(theme::BORDER))
