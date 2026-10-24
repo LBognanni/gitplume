@@ -14,6 +14,7 @@ pub const ADDITION_BACKGROUND: Color = Color::from_u32(0x142b1d);
 pub const REMOVAL_BACKGROUND: Color = Color::from_u32(0x351b20);
 pub const DIFF_BACKGROUND: Color = Color::from_u32(0x272822);
 pub const DANGER: Color = Color::from_u32(0xff7b72);
+pub const ADDITION: Color = Color::from_u32(0x7ee787);
 pub const PRIMARY: Color = Color::from_u32(0x0178d4);
 
 /// Panel titles, viewer titles, and the status bar.

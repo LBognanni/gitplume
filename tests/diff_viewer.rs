@@ -79,6 +79,40 @@ fn enabled(harness: &Harness, glyph: char) -> bool {
 }
 
 #[test]
+fn diff_title_shows_colored_line_totals_before_navigation() {
+    let patch = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n\
+                 @@ -1,2 +1,3 @@\n context\n-old\n+new\n+extra\n\
+                 @@ -20,2 +21 @@\n-removed\n last\n\\ No newline at end of file\n";
+    let mut harness = open(80, 12, patch.into());
+    let title = harness.line(2);
+    assert!(title.ends_with("+2, -2  ↑  ↓  "), "{title}");
+    let added = title.chars().position(|c| c == '+').unwrap() as u16;
+    let removed = title.chars().position(|c| c == '-').unwrap() as u16;
+    let plain = harness.buffer()[(removed - 1, 2)].fg;
+    let added_color = harness.buffer()[(added, 2)].fg;
+    let removed_color = harness.buffer()[(removed, 2)].fg;
+    assert_ne!(added_color, plain);
+    assert_ne!(removed_color, plain);
+    assert_ne!(added_color, removed_color);
+
+    harness.press(KeyCode::Char('w'));
+    harness.press(KeyCode::Char('n'));
+    assert!(harness.line(2).contains("+2, -2"));
+
+    harness.press(KeyCode::Esc);
+    load(&mut harness, "@@ -0,0 +1 @@\n+added\n".into());
+    assert!(harness.line(2).contains("+1, -0"));
+
+    harness.press(KeyCode::Esc);
+    load(&mut harness, "@@ -1 +0,0 @@\n-deleted\n".into());
+    assert!(harness.line(2).contains("+0, -1"));
+
+    harness.press(KeyCode::Esc);
+    load(&mut harness, String::new());
+    assert!(harness.line(2).contains("+0, -0"));
+}
+
+#[test]
 fn wrap_toggle_applies_independently_to_each_viewer() {
     let mut harness = Harness::new(Ok(state(&[], &[])));
     harness.press(KeyCode::Char('w'));

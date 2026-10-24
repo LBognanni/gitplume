@@ -202,7 +202,7 @@ fn render_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
     status_section(app, unstaged, Side::Unstaged, buf);
     let [title, list] =
         Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(commits);
-    viewer_title(app, title, "Commits", &[], buf);
+    viewer_title(app, title, "Commits", &[], None, buf);
     let loading = app.tree_loading();
     bordered_list(loading.then(loading_line).into_iter().collect(), list, buf);
     app.hits.push((list, Target::Pane(Focus::Commits)));
@@ -211,11 +211,16 @@ fn render_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 
     let [title, view] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(pane);
+    let counts = (!app.diff_loading && !app.diff_title.is_empty()).then(|| {
+        let doc = app.diff_view.document();
+        (doc.additions, doc.removals)
+    });
     viewer_title(
         app,
         title,
         &app.diff_title.clone(),
         &[Button::PreviousChange, Button::NextChange],
+        counts,
         buf,
     );
     if app.diff_loading {
@@ -243,7 +248,7 @@ fn render_files(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// The preview pane, shared by the Files and Find tabs.
 fn render_preview(app: &mut App, pane: Rect, buf: &mut Buffer) {
     let [title, view] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(pane);
-    viewer_title(app, title, &app.preview_title.clone(), &[], buf);
+    viewer_title(app, title, &app.preview_title.clone(), &[], None, buf);
     if app.preview_loading {
         Paragraph::new(loading_line())
             .style(Style::new().fg(theme::TEXT).bg(theme::DIFF_BACKGROUND))
@@ -426,7 +431,7 @@ fn status_section(app: &mut App, area: Rect, side: Side, buf: &mut Buffer) {
     } else {
         &[]
     };
-    viewer_title(app, title_row, title, buttons, buf);
+    viewer_title(app, title_row, title, buttons, None, buf);
     let focused = app.focus == focus;
     let loading = app.status_loading;
     bordered_list(loading.then(loading_line).into_iter().collect(), list, buf);
@@ -839,15 +844,38 @@ fn bordered_list(rows: Vec<Line<'static>>, area: Rect, buf: &mut Buffer) {
 }
 
 /// A title row with `label` on the left and icon `buttons` right-aligned.
-fn viewer_title(app: &mut App, area: Rect, label: &str, buttons: &[Button], buf: &mut Buffer) {
+fn viewer_title(
+    app: &mut App,
+    area: Rect,
+    label: &str,
+    buttons: &[Button],
+    counts: Option<(usize, usize)>,
+    buf: &mut Buffer,
+) {
     buf.set_style(area, theme::title());
     let inner = area.inner(ratatui::layout::Margin::new(1, 0));
     let actions = (buttons.len() as u16 * 3).min(inner.width);
-    let [text, mut rest] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(actions)]).areas(inner);
+    let summary = counts.map(|(added, removed)| {
+        Line::from(vec![
+            Span::styled(format!("+{added}"), Style::new().fg(theme::ADDITION)),
+            Span::raw(", "),
+            Span::styled(format!("-{removed}"), Style::new().fg(theme::DANGER)),
+            Span::raw(" "),
+        ])
+    });
+    let summary_width = summary.as_ref().map_or(0, |line| line.width() as u16);
+    let [text, stats, mut rest] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(summary_width.min(inner.width.saturating_sub(actions))),
+        Constraint::Length(actions),
+    ])
+    .areas(inner);
     Paragraph::new(label.to_string())
         .style(theme::title())
         .render(text, buf);
+    if let Some(summary) = summary {
+        summary.render(stats, buf);
+    }
     for &button in buttons {
         let rect = Rect {
             width: 3.min(rest.width),

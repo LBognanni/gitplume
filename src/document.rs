@@ -31,6 +31,8 @@ impl DocRow {
 pub struct Document {
     pub rows: Vec<DocRow>,
     pub changes: Vec<usize>,
+    pub additions: usize,
+    pub removals: usize,
     pub wrap_indent: usize,
     sides: Vec<Source>,
 }
@@ -47,6 +49,8 @@ impl Document {
         Self {
             rows: Vec::new(),
             changes: Vec::new(),
+            additions: 0,
+            removals: 0,
             wrap_indent: 0,
             sides: Vec::new(),
         }
@@ -63,6 +67,8 @@ impl Document {
                 source: None,
             }],
             changes: Vec::new(),
+            additions: 0,
+            removals: 0,
             wrap_indent: 0,
             sides: Vec::new(),
         }
@@ -178,6 +184,8 @@ pub fn diff_document(path: &str, patch: &str) -> Document {
     Document {
         rows: doc_rows,
         changes: diff::change_indices(&rows),
+        additions: rows.iter().filter(|row| row.kind == Kind::Add).count(),
+        removals: rows.iter().filter(|row| row.kind == Kind::Remove).count(),
         wrap_indent: 0,
         sides,
     }
@@ -237,6 +245,8 @@ pub fn load_preview(path: &Path) -> Document {
     Document {
         rows,
         changes: Vec::new(),
+        additions: 0,
+        removals: 0,
         wrap_indent: width + 2,
         sides: vec![side],
     }
