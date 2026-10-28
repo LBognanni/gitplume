@@ -3,7 +3,7 @@ mod common;
 use std::path::Path;
 
 use common::{Harness, TempDir};
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, MouseEventKind};
 use gitplume::app::{Event, Focus, Tab};
 use gitplume::watcher::{Invalidation, Watch};
 
@@ -83,6 +83,57 @@ fn live_refresh_while_files_tab_is_active_shows_no_loading_and_keeps_tree_state(
         .clone();
     assert_eq!(cursor_path_after, "src/b.rs");
     assert_eq!(harness.app.files.offset, offset_before);
+}
+
+#[test]
+fn scrolling_away_from_the_open_file_survives_refresh_until_the_preview_is_clicked() {
+    let dir = TempDir::new("files-scroll-refresh");
+    std::fs::write(dir.0.join("file01.txt"), "opened file content\n").unwrap();
+    let files: Vec<String> = (0..60).map(|i| format!("file{i:02}.txt")).collect();
+    let paths: Vec<&str> = files.iter().map(String::as_str).collect();
+    let mut harness = Harness::launched(&dir.0, &dir.0, &paths);
+    harness.press(KeyCode::Char('2'));
+    harness.click(harness.at("file01.txt"));
+    assert!(harness.screen().contains("opened file content"));
+
+    for _ in 0..4 {
+        harness.scroll(MouseEventKind::ScrollDown, (10, 10));
+    }
+    let top = harness.line(3);
+    assert!(top.contains("file11.txt"), "{}", harness.screen());
+
+    // A refresh must not pull an unchanged selection back into view.
+    watch(&mut harness, changed(&["other.txt"]));
+    assert_eq!(harness.line(3), top);
+
+    // Inserting above the selection changes its row, but isn't navigation.
+    let mut refreshed = files;
+    refreshed.insert(0, "aaa.txt".to_string());
+    *harness.git.files.lock().unwrap() = Ok(refreshed);
+    watch(&mut harness, changed(&["aaa.txt"]));
+    assert!(
+        harness.line(3).contains("file10.txt"),
+        "{}",
+        harness.screen()
+    );
+
+    let view = harness.app.preview_view.viewport();
+    harness.scroll(MouseEventKind::ScrollDown, (view.x, view.y));
+    assert!(harness.line(3).contains("file10.txt"));
+    harness.click((view.x, view.y));
+    assert!(
+        harness.line(3).contains("file01.txt"),
+        "{}",
+        harness.screen()
+    );
+    assert_eq!(harness.app.focus, Focus::Preview);
+    assert!(harness.screen().contains("opened file content"));
+
+    // Revealing is a one-shot action, not continuous following.
+    harness.scroll(MouseEventKind::ScrollDown, (10, 10));
+    let top = harness.line(3);
+    watch(&mut harness, changed(&["other.txt"]));
+    assert_eq!(harness.line(3), top);
 }
 
 #[test]

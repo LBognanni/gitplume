@@ -433,6 +433,11 @@ impl FileTree {
     /// disturb the tree.
     fn rebuild(&mut self, root_name: String, files: &[String]) {
         let cursor_path = self.cursor.map(|index| self.nodes[index].path.clone());
+        let following_cursor = self.followed
+            == self
+                .rows()
+                .iter()
+                .position(|&index| Some(index) == self.cursor);
         let expanded: std::collections::HashSet<&str> = self
             .nodes
             .iter()
@@ -450,6 +455,13 @@ impl FileTree {
             .or(rebuilt.cursor);
         rebuilt.offset = self.offset;
         rebuilt.scroll_x = self.scroll_x;
+        // Row numbers can change during refresh without the user moving the cursor.
+        if following_cursor {
+            rebuilt.followed = rebuilt
+                .rows()
+                .iter()
+                .position(|&index| Some(index) == rebuilt.cursor);
+        }
         *self = rebuilt;
     }
 
@@ -2064,6 +2076,17 @@ impl App {
                 Some(Target::Tab(tab)) => return self.show_tab(tab),
                 Some(Target::Pane(focus)) => {
                     self.focus = focus;
+                    if focus == Focus::Preview && self.tab == Tab::Files {
+                        let index = self.files.nodes.iter().position(|node| {
+                            !node.dir
+                                && self.preview_path.as_ref() == Some(&self.cwd.join(&node.path))
+                        });
+                        if let Some(index) = index {
+                            self.files.reveal(index);
+                            self.files.cursor = Some(index);
+                            self.files.followed = None;
+                        }
+                    }
                     if matches!(focus, Focus::Diff | Focus::Preview) {
                         self.capture = Some(focus);
                         self.view_mut(focus).handle_mouse(mouse);
