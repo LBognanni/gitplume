@@ -741,6 +741,14 @@ impl CodeView {
         self.materialized = 0;
         let content = self.content;
         let indent = self.indent();
+        let blank_gutter_width = if self.wrapped {
+            indent
+        } else {
+            self.doc
+                .wrap_indent
+                .saturating_sub(self.scroll_x)
+                .min(content.width as usize)
+        } as u16;
         let mut cached: Option<Materialized> = None;
         for y in 0..content.height {
             let screen_y = content.y + y;
@@ -748,6 +756,10 @@ impl CodeView {
                 buf[(x, screen_y)].reset();
             }
             let Some(&v) = self.visual.get(self.scroll_y + y as usize) else {
+                buf.set_style(
+                    Rect::new(content.x, screen_y, blank_gutter_width, 1),
+                    theme::gutter(),
+                );
                 continue;
             };
             if cached.as_ref().is_none_or(|(row, ..)| *row != v.row) {
@@ -961,6 +973,47 @@ mod tests {
         view.set_document(doc(&["abc"]));
         let buffer = draw(&mut view, 5, 2);
         assert_eq!(line(&buffer, 1), "     ");
+    }
+
+    #[test]
+    fn gutter_background_continues_below_short_files_without_change_markers() {
+        for wrapped in [false, true] {
+            let mut view = CodeView::new();
+            view.set_document(diff_document(
+                "example.txt",
+                "@@ -1 +1,2 @@\n context\n+added\n",
+            ));
+            let gutter = view.document().rows[0].gutter.len() as u16;
+            view.set_wrapped(wrapped);
+            let buffer = draw(&mut view, gutter + 10, 5);
+            for y in 2..5 {
+                assert_eq!(line(&buffer, y).trim(), "");
+                for x in 0..gutter {
+                    assert_eq!(buffer[(x, y)].bg, buffer[(0, 0)].bg);
+                    assert_ne!(buffer[(x, y)].bg, buffer[(0, 1)].bg);
+                }
+                assert_ne!(buffer[(0, y)].bg, buffer[(gutter, y)].bg);
+            }
+        }
+    }
+
+    #[test]
+    fn gutter_below_short_files_tracks_horizontal_scrolling() {
+        let mut view = CodeView::new();
+        let patch = format!("@@ -1 +1 @@\n {}\n", "x".repeat(80));
+        view.set_document(diff_document("example.txt", &patch));
+        let gutter = view.document().rows[0].gutter.len() as u16;
+        draw(&mut view, gutter + 10, 5);
+        view.scroll_to(4, 0);
+        let buffer = draw(&mut view, gutter + 10, 5);
+        for x in 0..gutter - 4 {
+            assert_eq!(buffer[(x, 2)].bg, buffer[(0, 0)].bg);
+        }
+        assert_ne!(buffer[(gutter - 4, 2)].bg, buffer[(0, 0)].bg);
+
+        view.scroll_to(gutter as usize, 0);
+        let buffer = draw(&mut view, gutter + 10, 5);
+        assert!((0..gutter + 10).all(|x| buffer[(x, 2)].bg == buffer[(gutter, 2)].bg));
     }
 
     #[test]
