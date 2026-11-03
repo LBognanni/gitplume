@@ -141,6 +141,8 @@ pub enum Target {
     JumpResult(usize),
     /// The `[ ]` columns of a supported status list row.
     Checkbox(Side, usize),
+    /// A status section title, excluding its bulk-action buttons.
+    StatusHeader(Side),
     /// The dimmed area behind a modal; swallows input.
     Backdrop,
     CloseShortcuts,
@@ -169,9 +171,10 @@ impl Target {
                 | Focus::FilesTree
                 | Focus::FindResults),
             ) => Some(focus),
-            Self::Row(s, _) | Self::Checkbox(s, _) | Self::Button(Button::Row(s, _, _)) => {
-                Some(side(s))
-            }
+            Self::Row(s, _)
+            | Self::Checkbox(s, _)
+            | Self::StatusHeader(s)
+            | Self::Button(Button::Row(s, _, _)) => Some(side(s)),
             Self::Scrollbar(focus, _) => Some(focus),
             Self::TreeRow(_) => Some(Focus::Commits),
             Self::FileRow(_) => Some(Focus::FilesTree),
@@ -257,6 +260,18 @@ impl StatusList {
             .is_some_and(|e| e.unsupported_reason.is_none())
         {
             self.checked[index] = !self.checked[index];
+        }
+    }
+
+    fn toggle_all(&mut self) {
+        let all_checked = self
+            .entries
+            .iter()
+            .zip(&self.checked)
+            .filter(|(entry, _)| entry.unsupported_reason.is_none())
+            .all(|(_, checked)| *checked);
+        for (entry, checked) in self.entries.iter().zip(&mut self.checked) {
+            *checked = entry.unsupported_reason.is_none() && !all_checked;
         }
     }
 
@@ -2151,6 +2166,12 @@ impl App {
                 Some(Target::Checkbox(side, index)) => {
                     self.focus_list(side);
                     self.list_mut(side).toggle(index);
+                }
+                Some(Target::StatusHeader(side)) => {
+                    self.focus_list(side);
+                    if !self.status_loading {
+                        self.list_mut(side).toggle_all();
+                    }
                 }
                 Some(Target::Button(button)) => return self.press_button(button),
                 Some(Target::Toast(id)) => self.toasts.retain(|toast| toast.id != id),

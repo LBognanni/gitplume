@@ -437,6 +437,8 @@ fn status_section(app: &mut App, area: Rect, side: Side, buf: &mut Buffer) {
             (added + entry.additions, removed + entry.removals)
         })
     });
+    // Register the header first so the title's bulk-action buttons take precedence.
+    app.hits.push((title_row, Target::StatusHeader(side)));
     viewer_title(app, title_row, title, buttons, counts, buf);
     let focused = app.focus == focus;
     let loading = app.status_loading;

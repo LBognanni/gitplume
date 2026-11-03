@@ -71,6 +71,90 @@ fn labels_preserve_plain_paths() {
 }
 
 #[test]
+fn status_headers_toggle_all_files_in_only_their_section() {
+    let mut harness = Harness::new(Ok(state(
+        &["staged-a.txt", "staged-b.txt"],
+        &["unstaged-a.txt", "unstaged-b.txt"],
+    )));
+    let start = harness.git.calls().len();
+    for (title, focus, files, other) in [
+        (
+            "Staged",
+            Focus::Staged,
+            ["staged-a.txt", "staged-b.txt"],
+            ["unstaged-a.txt", "unstaged-b.txt"],
+        ),
+        (
+            "Unstaged",
+            Focus::Unstaged,
+            ["unstaged-a.txt", "unstaged-b.txt"],
+            ["staged-a.txt", "staged-b.txt"],
+        ),
+    ] {
+        // A partial selection becomes a full selection.
+        harness.click((1, row_of(&harness, files[0])));
+        harness.click(harness.at(title));
+        assert_eq!(harness.app.focus, focus);
+        for file in files {
+            assert!(harness.screen().contains(&format!("[x] M {file}")));
+        }
+        for file in other {
+            assert!(harness.screen().contains(&format!("[ ] M {file}")));
+        }
+        // Blank header space also toggles, even while buttons are visible.
+        let y = row_of(&harness, title);
+        harness.click((12, y));
+        for file in files {
+            assert!(harness.screen().contains(&format!("[ ] M {file}")));
+        }
+        harness.click(harness.at(title));
+        for file in files {
+            assert!(harness.screen().contains(&format!("[x] M {file}")));
+        }
+        harness.click(harness.at(title));
+    }
+    assert_eq!(harness.git.calls().len(), start);
+}
+
+#[test]
+fn status_header_selection_skips_unsupported_files_and_handles_empty_sections() {
+    let mut harness = Harness::new(Ok(repo(
+        Vec::new(),
+        vec![
+            FileEntry::new("editable.txt", Side::Unstaged, 'M'),
+            FileEntry::unsupported("conflict.txt", Side::Unstaged, 'U', "Conflict"),
+        ],
+    )));
+    let start = harness.git.calls().len();
+    harness.click(harness.at("Staged"));
+    assert_eq!(
+        sidebar_glyph(&harness, row_of(&harness, "Staged"), '↓'),
+        None
+    );
+    for mark in ["[x]", "[ ]"] {
+        harness.click(harness.at("Unstaged"));
+        assert!(harness.screen().contains(&format!("{mark} M editable.txt")));
+        assert!(harness.screen().contains("[!] U conflict.txt"));
+    }
+    assert_eq!(harness.git.calls().len(), start);
+}
+
+#[test]
+fn bulk_discard_does_not_toggle_header_selection() {
+    let mut harness = Harness::new(Ok(state(&[], &["a.txt", "b.txt"])));
+    harness.click((1, row_of(&harness, "a.txt")));
+    let title = row_of(&harness, "Unstaged");
+    let discard = sidebar_glyph(&harness, title, '↶').expect("bulk discard");
+    let start = harness.git.calls().len();
+    harness.click(discard);
+    assert!(harness.screen().contains("Discard changes to 1 file?"));
+    harness.click(harness.at("Cancel"));
+    assert!(harness.screen().contains("[x] M a.txt"));
+    assert!(harness.screen().contains("[ ] M b.txt"));
+    assert_eq!(harness.git.calls().len(), start);
+}
+
+#[test]
 fn space_marks_the_highlighted_row_checked() {
     let mut harness = Harness::new(Ok(state(&[], &["example.py"])));
     harness.press(KeyCode::Char(' '));
