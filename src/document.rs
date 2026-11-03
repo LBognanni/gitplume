@@ -3,7 +3,7 @@
 use std::io::{ErrorKind, Read};
 use std::path::Path;
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 use crate::diff::{self, Kind};
@@ -22,6 +22,12 @@ pub struct DocRow {
 }
 
 impl DocRow {
+    pub fn gutter_style(&self) -> Style {
+        self.background
+            .map_or(Style::new(), |bg| Style::new().bg(bg))
+            .patch(self.gutter_style)
+    }
+
     /// Background spanning the full row width, if any.
     pub fn background(&self) -> Option<Color> {
         self.background
@@ -93,10 +99,7 @@ impl Document {
             .map_or(Style::new(), |bg| Style::new().bg(bg));
         let mut spans = Vec::new();
         if !row.gutter.is_empty() {
-            spans.push(Span::styled(
-                row.gutter.clone(),
-                base.patch(row.gutter_style),
-            ));
+            spans.push(Span::styled(row.gutter.clone(), row.gutter_style()));
         }
         let runs = row
             .source
@@ -156,10 +159,22 @@ pub fn diff_document(path: &str, patch: &str) -> Document {
     let doc_rows = rows
         .iter()
         .map(|row| {
-            let (marker, background) = match row.kind {
-                Kind::Add => ('+', Some(theme::ADDITION_BACKGROUND)),
-                Kind::Remove => ('-', Some(theme::REMOVAL_BACKGROUND)),
-                Kind::Context => (' ', None),
+            let (marker, background, gutter_style) = match row.kind {
+                Kind::Add => (
+                    '+',
+                    Some(theme::ADDITION_BACKGROUND),
+                    Style::new()
+                        .fg(theme::ADDITION_GUTTER_TEXT)
+                        .bg(theme::ADDITION_GUTTER_BACKGROUND),
+                ),
+                Kind::Remove => (
+                    '-',
+                    Some(theme::REMOVAL_BACKGROUND),
+                    Style::new()
+                        .fg(theme::REMOVAL_GUTTER_TEXT)
+                        .bg(theme::REMOVAL_GUTTER_BACKGROUND),
+                ),
+                Kind::Context => (' ', None, theme::gutter()),
             };
             let source = if row.new_no.is_some() {
                 Some((0, new_index))
@@ -175,7 +190,7 @@ pub fn diff_document(path: &str, patch: &str) -> Document {
                     number(row.new_no)
                 ),
                 text: row.text.clone(),
-                gutter_style: Style::new(),
+                gutter_style,
                 background,
                 source,
             }
@@ -186,7 +201,7 @@ pub fn diff_document(path: &str, patch: &str) -> Document {
         changes: diff::change_indices(&rows),
         additions: rows.iter().filter(|row| row.kind == Kind::Add).count(),
         removals: rows.iter().filter(|row| row.kind == Kind::Remove).count(),
-        wrap_indent: 0,
+        wrap_indent: 2 * width + 4,
         sides,
     }
 }
@@ -237,7 +252,7 @@ pub fn load_preview(path: &Path) -> Document {
         .map(|(i, text)| DocRow {
             gutter: format!(" {:>width$} ", i + 1),
             text: text.to_string(),
-            gutter_style: Style::new().add_modifier(Modifier::DIM),
+            gutter_style: theme::gutter(),
             background: None,
             source: Some((0, i)),
         })
@@ -482,7 +497,7 @@ index 1111111..2222222 100644
     }
 
     #[test]
-    fn diff_rows_use_plain_columns_and_full_width_change_backgrounds() {
+    fn diff_rows_use_plain_columns_and_distinct_gutter_backgrounds() {
         let doc = diff_document(
             "example.txt",
             &hunk(" context [not markup]\n-removed\n+added\n"),
@@ -492,13 +507,16 @@ index 1111111..2222222 100644
         assert_eq!(plain(&context), "     1    1 context [not markup]");
         assert_eq!(plain(&removed), "-    2      removed");
         assert_eq!(plain(&added), "+         2 added");
-        assert_eq!(style_at(&context, 0).bg, None);
+        assert_ne!(
+            style_at(&context, 0).bg,
+            style_at(&context, GUTTER_WIDTH).bg
+        );
         assert_eq!(doc.rows[0].background(), None);
         for (line, row) in [(&removed, &doc.rows[1]), (&added, &doc.rows[2])] {
             let last = plain(line).chars().count() - 1;
             assert!(style_at(line, 0).bg.is_some());
-            assert_eq!(style_at(line, last).bg, style_at(line, 0).bg);
-            assert_eq!(row.background(), style_at(line, 0).bg);
+            assert_ne!(style_at(line, last).bg, style_at(line, 0).bg);
+            assert_eq!(row.background(), style_at(line, last).bg);
         }
         assert_ne!(style_at(&removed, 0).bg, style_at(&added, 0).bg);
     }
@@ -508,7 +526,7 @@ index 1111111..2222222 100644
         let doc = diff_document("empty.txt", &hunk(" \n"));
 
         assert_eq!(plains(&doc), ["     1    1 "]);
-        assert_eq!(style_at(&doc.line(0), 0), Style::new());
+        assert!(style_at(&doc.line(0), 0).bg.is_some());
     }
 
     #[test]
@@ -525,7 +543,7 @@ index 1111111..2222222 100644
         assert!(style_at(&added, GUTTER_WIDTH).bg.is_some());
         assert!(style_at(&removed, GUTTER_WIDTH).fg.is_some());
         for line in [&context, &removed, &added] {
-            assert_eq!(style_at(line, 0).fg, None);
+            assert_ne!(style_at(line, 0).fg, style_at(line, GUTTER_WIDTH).fg);
         }
     }
 
@@ -591,11 +609,8 @@ index 1111111..2222222 100644
         let line = doc.line(0);
         assert_eq!(line.style, Style::new());
         assert_eq!(line.spans[0].content, " 1 ");
-        assert_eq!(
-            line.spans[0].style,
-            Style::new().add_modifier(Modifier::DIM)
-        );
-        assert_eq!(style_at(&line, 0).fg, None);
+        assert_ne!(style_at(&line, 0).fg, style_at(&line, 3).fg);
+        assert_ne!(style_at(&line, 0).bg, style_at(&line, 3).bg);
         assert!(source_colors_from(&line, 3).len() > 1);
         assert_eq!(doc.wrap_indent, 3);
     }

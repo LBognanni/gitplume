@@ -13,9 +13,19 @@ pub const FOCUSED_SELECTION: Color = Color::from_u32(0x174ea6);
 pub const ADDITION_BACKGROUND: Color = Color::from_u32(0x142b1d);
 pub const REMOVAL_BACKGROUND: Color = Color::from_u32(0x351b20);
 pub const DIFF_BACKGROUND: Color = Color::from_u32(0x272822);
+pub const GUTTER_BACKGROUND: Color = Color::from_u32(0x1a1d1d);
+pub const GUTTER_TEXT: Color = Color::from_u32(0x7d8590);
+pub const ADDITION_GUTTER_BACKGROUND: Color = Color::from_u32(0x102019);
+pub const ADDITION_GUTTER_TEXT: Color = Color::from_u32(0x79a580);
+pub const REMOVAL_GUTTER_BACKGROUND: Color = Color::from_u32(0x25161b);
+pub const REMOVAL_GUTTER_TEXT: Color = Color::from_u32(0xb18483);
 pub const DANGER: Color = Color::from_u32(0xff7b72);
 pub const ADDITION: Color = Color::from_u32(0x7ee787);
 pub const PRIMARY: Color = Color::from_u32(0x0178d4);
+
+pub fn gutter() -> Style {
+    Style::new().fg(GUTTER_TEXT).bg(GUTTER_BACKGROUND)
+}
 
 /// Panel titles, viewer titles, and the status bar.
 pub fn title() -> Style {

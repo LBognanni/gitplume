@@ -757,7 +757,8 @@ impl CodeView {
             // Display cells paired with their source character offsets.
             let mut cells: Vec<(char, Style, Option<usize>)> = Vec::new();
             if v.continuation {
-                cells.extend((0..indent).map(|_| (' ', *base, None)));
+                let gutter = self.doc.rows[v.row].gutter_style();
+                cells.extend((0..indent).map(|_| (' ', gutter, None)));
                 cells.extend((v.start..v.end).map(|i| (chars[i].0, chars[i].1, Some(i))));
             } else {
                 cells.extend((0..v.end).map(|i| (chars[i].0, chars[i].1, Some(i))));
@@ -942,14 +943,16 @@ mod tests {
             buffer[(1, 0)].fg,
             "keyword cells differ from gutter cells"
         );
-        assert!((0..gutter + 3).all(|x| buffer[(x, 0)].bg == row_bg));
+        assert!((0..gutter).all(|x| buffer[(x, 0)].bg != row_bg));
+        assert!((gutter..gutter + 3).all(|x| buffer[(x, 0)].bg == row_bg));
 
         draw(&mut view, 4, 2);
         view.scroll_to(gutter as usize - 1, 0);
         let buffer = draw(&mut view, 4, 2);
         assert_eq!(line(&buffer, 0), " def");
         assert_eq!(buffer[(1, 0)].fg, keyword);
-        assert!((0..4).all(|x| buffer[(x, 0)].bg == row_bg));
+        assert_ne!(buffer[(0, 0)].bg, row_bg);
+        assert!((1..4).all(|x| buffer[(x, 0)].bg == row_bg));
     }
 
     #[test]
@@ -1331,6 +1334,70 @@ mod tests {
         assert!(rows[0].starts_with(" 1 abc"));
         assert!(rows[1..].iter().all(|row| row.starts_with("   ")));
         assert!(rows.iter().all(|row| !row.trim().is_empty()));
+    }
+
+    #[test]
+    fn wrapped_diff_keeps_a_styled_gutter_and_copies_only_source_on_continuations() {
+        for (marker, old, new) in [
+            ('+', "0,0", "1123"),
+            ('-', "1123", "0,0"),
+            (' ', "1123", "1123"),
+        ] {
+            let patch = format!("@@ -{old} +{new} @@\n{marker}abcdefghijklmnopqr\n");
+            let mut view = CodeView::new();
+            view.set_document(diff_document("example.txt", &patch));
+            let gutter = view.document().rows[0].gutter.len() as u16;
+            let prefix = view.document().rows[0].gutter.clone();
+            view.set_wrapped(true);
+            let buffer = draw(&mut view, gutter + 6, 6);
+
+            assert_eq!(line(&buffer, 0), format!("{prefix}abcdef"));
+            assert_eq!(
+                line(&buffer, 1),
+                format!("{}ghijkl", " ".repeat(gutter as usize))
+            );
+            assert_eq!(
+                line(&buffer, 2),
+                format!("{}mnopqr", " ".repeat(gutter as usize))
+            );
+            for y in 0..3 {
+                for x in 0..gutter {
+                    assert_eq!(buffer[(x, y)].bg, buffer[(0, 0)].bg);
+                    assert_eq!(buffer[(x, y)].fg, buffer[(0, 0)].fg);
+                }
+                assert_ne!(buffer[(0, y)].bg, buffer[(gutter, y)].bg);
+                assert_ne!(buffer[(0, y)].fg, buffer[(gutter, y)].fg);
+            }
+            assert_eq!(
+                select(&mut view, (gutter, 0), (gutter + 6, 2)).as_deref(),
+                Some("abcdefghijklmnopqr")
+            );
+            assert_eq!(
+                select(&mut view, (0, 1), (gutter + 6, 1)).as_deref(),
+                Some("ghijkl")
+            );
+        }
+    }
+
+    #[test]
+    fn wrapped_diff_gutter_widens_with_numbers_and_shrinks_in_tiny_panes() {
+        let patch = "@@ -12345 +12345 @@\n-界界界界界界\n+short\n";
+        let mut view = CodeView::new();
+        view.set_document(diff_document("example.txt", patch));
+        let gutter = view.document().rows[0].gutter.len() as u16;
+        view.set_wrapped(true);
+        let buffer = draw(&mut view, gutter + 6, 6);
+        assert!(line(&buffer, 0).contains("12345"));
+        assert_eq!(
+            line(&buffer, 1),
+            format!("{}界界界", " ".repeat(gutter as usize))
+        );
+        for width in 1..=gutter {
+            draw(&mut view, width, 6);
+        }
+        let buffer = draw(&mut view, gutter + 12, 6);
+        assert!(line(&buffer, 0).ends_with("界界界界界界"));
+        assert!(line(&buffer, 1).contains("short"));
     }
 
     #[test]
