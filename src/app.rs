@@ -905,7 +905,7 @@ impl App {
         self.files = FileTree::build(self.cwd.display().to_string(), &files);
         self.search_index = Self::index_files(files);
         self.clear_preview();
-        self.search()
+        self.search(false)
     }
 
     /// Apply a background file-list refresh: rebuild the tree in place
@@ -914,7 +914,7 @@ impl App {
     fn apply_files_quiet(&mut self, files: Vec<String>) -> Vec<Effect> {
         self.files.rebuild(self.cwd.display().to_string(), &files);
         self.search_index = Self::index_files(files);
-        self.search()
+        self.search(true)
     }
 
     /// Pair each path with its lowercase form, for file jump and find-in-files.
@@ -975,8 +975,14 @@ impl App {
     }
 
     /// Run or clear find-in-files, bumping the token so a stale result is dropped.
-    fn search(&mut self) -> Vec<Effect> {
+    fn search(&mut self, quiet: bool) -> Vec<Effect> {
         self.find_token += 1;
+        if !quiet {
+            self.find.cursor = None;
+            self.find.offset = 0;
+            self.find.scroll_x = 0;
+            self.find.followed = None;
+        }
         if self.find.query.chars().count() < MIN_FIND_QUERY {
             self.find.loading = false;
             self.find.results.clear();
@@ -987,7 +993,9 @@ impl App {
             return Vec::new();
         }
         let paths = find::filter_paths(&self.search_index, &self.find.filter);
-        self.find.loading = true;
+        if !quiet {
+            self.find.loading = true;
+        }
         vec![Effect::Git(Job::Grep {
             cwd: self.cwd.clone(),
             query: self.find.query.clone(),
@@ -1018,11 +1026,11 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.find_field_mut().pop();
-                return self.search();
+                return self.search(false);
             }
             KeyCode::Char(c) if (key.modifiers - KeyModifiers::SHIFT).is_empty() => {
                 self.find_field_mut().push(c);
-                return self.search();
+                return self.search(false);
             }
             _ => {}
         }
@@ -1625,11 +1633,19 @@ impl App {
                 self.find.loading = false;
                 match result {
                     Ok((results, truncated)) => {
+                        self.find.cursor = self
+                            .find
+                            .cursor
+                            .and_then(|index| self.find.results.get(index))
+                            .and_then(|selected| {
+                                results.iter().position(|found| {
+                                    found.path == selected.path && found.line == selected.line
+                                })
+                            });
+                        // Reconciliation is not navigation: keep a freely scrolled viewport.
+                        self.find.followed = self.find.cursor;
                         self.find.results = results;
                         self.find.truncated = truncated;
-                        self.find.cursor = None;
-                        self.find.offset = 0;
-                        self.find.followed = None;
                     }
                     Err(error) => self.git_error("search files", &error),
                 }

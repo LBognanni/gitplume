@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use notify_debouncer_full::new_debouncer;
-use notify_debouncer_full::notify::RecursiveMode;
+use notify_debouncer_full::notify::{Event as FileEvent, EventKind, RecursiveMode};
 
 use crate::app::Event;
 use crate::git::GitApi;
@@ -86,6 +86,20 @@ pub fn classify<'a>(
     result
 }
 
+/// Reads (including our own searches and previews) do not invalidate anything.
+fn classify_events<'a>(
+    root: &Path,
+    git_dir: &Path,
+    common_dir: &Path,
+    events: impl IntoIterator<Item = &'a FileEvent>,
+) -> Invalidation {
+    let paths = events
+        .into_iter()
+        .filter(|event| !matches!(event.kind, EventKind::Access(_)))
+        .flat_map(|event| event.paths.iter());
+    classify(root, git_dir, common_dir, paths.map(PathBuf::as_path))
+}
+
 /// Watch the repository at `root` on a thread, posting `Event::Watch` messages.
 pub fn spawn(git: Arc<dyn GitApi>, root: PathBuf, tx: Sender<Event>) {
     thread::spawn(move || {
@@ -112,8 +126,12 @@ fn watch(git: &dyn GitApi, root: &Path, tx: &Sender<Event>) -> Result<(), ()> {
     tx.send(Event::Watch(Watch::Started)).map_err(|_| ())?;
     for batch in rx {
         let batch = batch.map_err(|_| ())?;
-        let paths = batch.iter().flat_map(|event| event.paths.iter());
-        let invalidation = classify(root, &git_dir, &common_dir, paths.map(PathBuf::as_path));
+        let invalidation = classify_events(
+            root,
+            &git_dir,
+            &common_dir,
+            batch.iter().map(|event| &event.event),
+        );
         if invalidation != Invalidation::default() {
             tx.send(Event::Watch(Watch::Changed(invalidation)))
                 .map_err(|_| ())?;
@@ -173,6 +191,65 @@ mod tests {
     #[test]
     fn worktree_edit_invalidates_status_with_relative_path() {
         assert_eq!(normal(&["/work/repo/src/a.py"]), edited(&["src/a.py"]));
+    }
+
+    #[test]
+    fn access_events_do_not_invalidate_worktree_or_git_metadata() {
+        use notify_debouncer_full::notify::event::{AccessKind, AccessMode};
+
+        let events: Vec<_> = [
+            AccessKind::Read,
+            AccessKind::Open(AccessMode::Read),
+            AccessKind::Close(AccessMode::Read),
+        ]
+        .into_iter()
+        .map(|kind| {
+            FileEvent::new(EventKind::Access(kind))
+                .add_path(PathBuf::from("/work/repo/src/a.py"))
+                .add_path(PathBuf::from("/work/repo/.git/index"))
+                .add_path(PathBuf::from("/work/repo/.git/HEAD"))
+        })
+        .collect();
+        assert_eq!(
+            classify_events(
+                Path::new(ROOT),
+                Path::new(COMMON),
+                Path::new(COMMON),
+                &events,
+            ),
+            Invalidation::default()
+        );
+    }
+
+    #[test]
+    fn changes_are_kept_in_a_batch_containing_access_events() {
+        use notify_debouncer_full::notify::event::{
+            AccessKind, CreateKind, ModifyKind, RemoveKind,
+        };
+
+        let events = [
+            FileEvent::new(EventKind::Access(AccessKind::Read))
+                .add_path(PathBuf::from("/work/repo/read.py")),
+            FileEvent::new(EventKind::Modify(ModifyKind::Any))
+                .add_path(PathBuf::from("/work/repo/edited.py")),
+            FileEvent::new(EventKind::Create(CreateKind::File))
+                .add_path(PathBuf::from("/work/repo/new.py")),
+            FileEvent::new(EventKind::Remove(RemoveKind::File))
+                .add_path(PathBuf::from("/work/repo/deleted.py")),
+            FileEvent::new(EventKind::Modify(ModifyKind::Any))
+                .add_path(PathBuf::from("/work/repo/.git/index")),
+        ];
+        let mut expected = edited(&["edited.py", "new.py", "deleted.py"]);
+        expected.index_changed = true;
+        assert_eq!(
+            classify_events(
+                Path::new(ROOT),
+                Path::new(COMMON),
+                Path::new(COMMON),
+                &events,
+            ),
+            expected
+        );
     }
 
     #[test]

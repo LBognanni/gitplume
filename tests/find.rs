@@ -3,7 +3,7 @@ mod common;
 use std::path::Path;
 
 use common::{Harness, TempDir, failure};
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
 use gitplume::app::{Event, Focus, Tab};
 use gitplume::model::GrepMatch;
 use gitplume::watcher::{Invalidation, Watch};
@@ -269,6 +269,125 @@ fn changed(paths: &[&str]) -> Invalidation {
 
 fn watch(harness: &mut Harness, invalidation: Invalidation) {
     harness.send(Event::Watch(Watch::Changed(invalidation)));
+}
+
+#[test]
+fn background_search_keeps_selection_and_scroll_without_hiding_results() {
+    let mut harness = Harness::launched(Path::new(ROOT), Path::new(ROOT), &["0.rs", "a.rs"]);
+    harness
+        .git
+        .grep_matches
+        .lock()
+        .unwrap()
+        .extend((1..=100).map(|line| found("a.rs", line, &format!("needle {line}"))));
+    open_find(&mut harness);
+    type_text(&mut harness, "needle");
+    harness.click(harness.at("a.rs:2 "));
+    let selected = harness.at("a.rs:2 ");
+    let selected_bg = harness.buffer()[selected].bg;
+    assert_ne!(selected_bg, harness.buffer()[harness.at("a.rs:1 ")].bg);
+
+    // Hold the refresh so the in-flight state is also observable.
+    harness.hold_files = true;
+    watch(&mut harness, changed(&["other.rs"]));
+    let files = harness.run_files();
+    harness.send(files);
+    assert!(harness.find("Searching").is_none());
+    assert_eq!(harness.buffer()[selected].bg, selected_bg);
+    let grep = harness.run_files();
+    harness.send(grep);
+    assert_eq!(harness.buffer()[selected].bg, selected_bg);
+
+    // Scrolling away from the selection must survive even if its index changes.
+    harness.hold_files = false;
+    for _ in 0..4 {
+        harness.scroll(MouseEventKind::ScrollDown, selected);
+    }
+    let top = harness.line(selected.1 - 1);
+    harness
+        .git
+        .grep_matches
+        .lock()
+        .unwrap()
+        .insert(0, found("0.rs", 1, "new needle"));
+    watch(&mut harness, changed(&["a.rs"]));
+    assert!(harness.find("a.rs:2 ").is_none());
+    assert_ne!(
+        harness.line(selected.1 - 1),
+        top,
+        "the inserted row changes visible content, not scroll position"
+    );
+    assert!(harness.find("a.rs:12 ").is_some(), "{}", harness.screen());
+
+    // Enter still opens the selected match, not its old numeric index.
+    harness.press(KeyCode::Enter);
+    assert!(harness.line(2).contains("a.rs"));
+    harness.press(KeyCode::Down);
+    let next = harness.at("a.rs:3 ");
+    assert_eq!(harness.buffer()[next].bg, selected_bg);
+}
+
+#[test]
+fn background_search_follows_a_surviving_match_and_clears_a_removed_selection() {
+    let mut harness = Harness::launched(Path::new(ROOT), Path::new(ROOT), &["a.rs"]);
+    *harness.git.grep_matches.lock().unwrap() = vec![
+        found("a.rs", 10, "needle first"),
+        found("a.rs", 20, "needle selected"),
+    ];
+    open_find(&mut harness);
+    type_text(&mut harness, "needle");
+    harness.click(harness.at("a.rs:20"));
+    let bg = harness.buffer()[harness.at("a.rs:20")].bg;
+    *harness.git.grep_matches.lock().unwrap() = vec![
+        found("a.rs", 1, "needle inserted"),
+        found("a.rs", 10, "needle first"),
+        found("a.rs", 20, "needle edited"),
+    ];
+    watch(&mut harness, changed(&["a.rs"]));
+    assert_eq!(harness.buffer()[harness.at("a.rs:20")].bg, bg);
+    assert_ne!(harness.buffer()[harness.at("a.rs:10")].bg, bg);
+
+    harness.git.grep_matches.lock().unwrap().pop();
+    watch(&mut harness, changed(&["a.rs"]));
+    assert!(harness.find("a.rs:20").is_none());
+    for label in ["a.rs:1 ", "a.rs:10"] {
+        assert_ne!(harness.buffer()[harness.at(label)].bg, bg);
+    }
+}
+
+#[test]
+fn editing_query_or_filter_resets_result_selection_and_scroll() {
+    for edit_filter in [false, true] {
+        let mut harness = Harness::launched(Path::new(ROOT), Path::new(ROOT), &["a.rs"]);
+        harness
+            .git
+            .grep_matches
+            .lock()
+            .unwrap()
+            .extend((1..=100).map(|line| found("a.rs", line, "needles")));
+        open_find(&mut harness);
+        type_text(&mut harness, "needle");
+        harness.press(KeyCode::Down);
+        for _ in 0..35 {
+            harness.press(KeyCode::Down);
+        }
+        let bg = harness.buffer()[harness.at("a.rs:36 ")].bg;
+        assert!(harness.find("a.rs:1 ").is_none());
+        harness.press(KeyCode::BackTab); // results -> filter
+        if !edit_filter {
+            harness.press(KeyCode::BackTab); // filter -> query
+        }
+        type_text(&mut harness, if edit_filter { "*.rs" } else { "s" });
+        assert!(harness.find("a.rs:1 ").is_some());
+        harness.press(KeyCode::Tab);
+        if !edit_filter {
+            harness.press(KeyCode::Tab);
+        }
+        assert_eq!(harness.app.focus, Focus::FindResults);
+        assert_ne!(harness.buffer()[harness.at("a.rs:1 ")].bg, bg);
+        harness.press(KeyCode::Down);
+        assert_eq!(harness.buffer()[harness.at("a.rs:1 ")].bg, bg);
+    }
 }
 
 #[test]
