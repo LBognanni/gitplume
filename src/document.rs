@@ -99,7 +99,12 @@ impl Document {
             .map_or(Style::new(), |bg| Style::new().bg(bg));
         let mut spans = Vec::new();
         if !row.gutter.is_empty() {
-            spans.push(Span::styled(row.gutter.clone(), row.gutter_style()));
+            // The trailing separator belongs to the content surface, not the gutter.
+            let gutter = row.gutter.strip_suffix(' ').unwrap_or(&row.gutter);
+            spans.push(Span::styled(gutter.to_string(), row.gutter_style()));
+            if gutter.len() < row.gutter.len() {
+                spans.push(Span::styled(" ", base));
+            }
         }
         let runs = row
             .source
@@ -185,7 +190,7 @@ pub fn diff_document(path: &str, patch: &str) -> Document {
             old_index += usize::from(row.old_no.is_some());
             DocRow {
                 gutter: format!(
-                    "{marker} {:>width$} {:>width$} ",
+                    "{marker} {:>width$} {:>width$}  ",
                     number(row.old_no),
                     number(row.new_no)
                 ),
@@ -201,7 +206,7 @@ pub fn diff_document(path: &str, patch: &str) -> Document {
         changes: diff::change_indices(&rows),
         additions: rows.iter().filter(|row| row.kind == Kind::Add).count(),
         removals: rows.iter().filter(|row| row.kind == Kind::Remove).count(),
-        wrap_indent: 2 * width + 4,
+        wrap_indent: 2 * width + 5,
         sides,
     }
 }
@@ -250,7 +255,7 @@ pub fn load_preview(path: &Path) -> Document {
         .iter()
         .enumerate()
         .map(|(i, text)| DocRow {
-            gutter: format!(" {:>width$} ", i + 1),
+            gutter: format!(" {:>width$}  ", i + 1),
             text: text.to_string(),
             gutter_style: theme::gutter(),
             background: None,
@@ -262,7 +267,7 @@ pub fn load_preview(path: &Path) -> Document {
         changes: Vec::new(),
         additions: 0,
         removals: 0,
-        wrap_indent: width + 2,
+        wrap_indent: width + 3,
         sides: vec![side],
     }
 }
@@ -271,7 +276,7 @@ pub fn load_preview(path: &Path) -> Document {
 mod tests {
     use super::*;
 
-    const GUTTER_WIDTH: usize = 12;
+    const GUTTER_WIDTH: usize = 13;
 
     const PATCH: &str = "\
 diff --git a/module.py b/module.py
@@ -372,11 +377,11 @@ index 1111111..2222222 100644
         assert_eq!(
             plains(&doc),
             [
-                "     1    1 import os",
-                "-    2      x = 1",
-                "+         2 x = 2",
-                "+         3 ",
-                "     3    4 def f():",
+                "     1    1  import os",
+                "-    2       x = 1",
+                "+         2  x = 2",
+                "+         3  ",
+                "     3    4  def f():",
             ]
         );
         assert_eq!(doc.changes, [1]);
@@ -397,7 +402,7 @@ index 1111111..2222222 100644
 
         assert_eq!(
             plains(&doc),
-            ["     1    1 context one", "     2    2 context two"]
+            ["     1    1  context one", "     2    2  context two"]
         );
         assert_eq!(doc.changes, Vec::<usize>::new());
         assert_eq!(doc.first_change(), None);
@@ -409,7 +414,7 @@ index 1111111..2222222 100644
 
         assert_eq!(
             plains(&doc),
-            ["-    1      [old]", "+         1 [new] [/bold]"]
+            ["-    1       [old]", "+         1  [new] [/bold]"]
         );
     }
 
@@ -446,7 +451,7 @@ index 1111111..2222222 100644
             let doc = diff_document(path, &hunk(&format!(" {source}\n")));
 
             let line = doc.line(0);
-            assert_eq!(plain(&line), format!("     1    1 {source}"));
+            assert_eq!(plain(&line), format!("     1    1  {source}"));
             assert!(
                 style_at(&line, GUTTER_WIDTH + colored_offset).fg.is_some(),
                 "{path}"
@@ -459,7 +464,7 @@ index 1111111..2222222 100644
         let doc = diff_document("notes.unknown", &hunk(" plain words\n"));
 
         let line = doc.line(0);
-        assert_eq!(plain(&line), "     1    1 plain words");
+        assert_eq!(plain(&line), "     1    1  plain words");
         assert_eq!(source_colors(&line), [None]);
     }
 
@@ -473,10 +478,10 @@ index 1111111..2222222 100644
         assert_eq!(
             plains(&doc),
             [
-                "     1    1 import os",
-                "-    2      removed = 1",
-                "+         2 ",
-                "     3    3 def f(): pass"
+                "     1    1  import os",
+                "-    2       removed = 1",
+                "+         2  ",
+                "     3    3  def f(): pass"
             ]
         );
         assert!(style_at(&doc.line(0), GUTTER_WIDTH).fg.is_some());
@@ -487,7 +492,10 @@ index 1111111..2222222 100644
     fn all_removals_show_as_removed_rows_highlighted_from_the_old_side() {
         let doc = diff_document("removed.py", &hunk("-import os\n-x = 1\n"));
 
-        assert_eq!(plains(&doc), ["-    1      import os", "-    2      x = 1"]);
+        assert_eq!(
+            plains(&doc),
+            ["-    1       import os", "-    2       x = 1"]
+        );
         for line in lines(&doc) {
             let last = plain(&line).chars().count() - 1;
             assert!(style_at(&line, 0).bg.is_some());
@@ -504,9 +512,9 @@ index 1111111..2222222 100644
         );
         let [context, removed, added] = lines(&doc).try_into().ok().unwrap();
 
-        assert_eq!(plain(&context), "     1    1 context [not markup]");
-        assert_eq!(plain(&removed), "-    2      removed");
-        assert_eq!(plain(&added), "+         2 added");
+        assert_eq!(plain(&context), "     1    1  context [not markup]");
+        assert_eq!(plain(&removed), "-    2       removed");
+        assert_eq!(plain(&added), "+         2  added");
         assert_ne!(
             style_at(&context, 0).bg,
             style_at(&context, GUTTER_WIDTH).bg
@@ -525,7 +533,7 @@ index 1111111..2222222 100644
     fn diff_rows_preserve_empty_rows() {
         let doc = diff_document("empty.txt", &hunk(" \n"));
 
-        assert_eq!(plains(&doc), ["     1    1 "]);
+        assert_eq!(plains(&doc), ["     1    1  "]);
         assert!(style_at(&doc.line(0), 0).bg.is_some());
     }
 
@@ -535,9 +543,9 @@ index 1111111..2222222 100644
         let doc = diff_document("src/example.py", patch);
         let [context, removed, added] = lines(&doc).try_into().ok().unwrap();
 
-        assert_eq!(plain(&context), "    20   10 import os");
-        assert_eq!(plain(&removed), "-   21      import sys");
-        assert_eq!(plain(&added), "+        30 import re");
+        assert_eq!(plain(&context), "    20   10  import os");
+        assert_eq!(plain(&removed), "-   21       import sys");
+        assert_eq!(plain(&added), "+        30  import re");
         assert!(style_at(&context, GUTTER_WIDTH).fg.is_some());
         assert!(style_at(&added, GUTTER_WIDTH).fg.is_some());
         assert!(style_at(&added, GUTTER_WIDTH).bg.is_some());
@@ -564,7 +572,7 @@ index 1111111..2222222 100644
         let patch = "--- a/f\n+++ b/f\n@@ -12345 +12345 @@\n-old\n+new\n";
         let doc = diff_document("f.txt", patch);
 
-        assert_eq!(plains(&doc), ["- 12345       old", "+       12345 new"]);
+        assert_eq!(plains(&doc), ["- 12345        old", "+       12345  new"]);
     }
 
     #[test]
@@ -605,14 +613,14 @@ index 1111111..2222222 100644
     fn preview_builds_numbered_highlighted_lines() {
         let doc = load_preview(&temp_file("example.py", b"answer = 42\n"));
 
-        assert_eq!(plains(&doc), [" 1 answer = 42", " 2 "]);
+        assert_eq!(plains(&doc), [" 1  answer = 42", " 2  "]);
         let line = doc.line(0);
         assert_eq!(line.style, Style::new());
         assert_eq!(line.spans[0].content, " 1 ");
-        assert_ne!(style_at(&line, 0).fg, style_at(&line, 3).fg);
-        assert_ne!(style_at(&line, 0).bg, style_at(&line, 3).bg);
-        assert!(source_colors_from(&line, 3).len() > 1);
-        assert_eq!(doc.wrap_indent, 3);
+        assert_ne!(style_at(&line, 0).fg, style_at(&line, 4).fg);
+        assert_ne!(style_at(&line, 0).bg, style_at(&line, 4).bg);
+        assert!(source_colors_from(&line, 4).len() > 1);
+        assert_eq!(doc.wrap_indent, 4);
     }
 
     fn source_colors_from(line: &Line, start: usize) -> Vec<String> {
@@ -627,12 +635,12 @@ index 1111111..2222222 100644
     #[test]
     fn preview_preserves_logical_lines() {
         for (i, (source, expected)) in [
-            ("", &[" 1 "][..]),
-            ("first", &[" 1 first"]),
-            ("first\n", &[" 1 first", " 2 "]),
-            ("first\n\n", &[" 1 first", " 2 ", " 3 "]),
-            ("first\rsecond", &[" 1 first", " 2 second"]),
-            ("first\r\nsecond", &[" 1 first", " 2 second"]),
+            ("", &[" 1  "][..]),
+            ("first", &[" 1  first"]),
+            ("first\n", &[" 1  first", " 2  "]),
+            ("first\n\n", &[" 1  first", " 2  ", " 3  "]),
+            ("first\rsecond", &[" 1  first", " 2  second"]),
+            ("first\r\nsecond", &[" 1  first", " 2  second"]),
         ]
         .into_iter()
         .enumerate()
@@ -646,9 +654,9 @@ index 1111111..2222222 100644
     fn preview_gutter_widens_with_the_line_count() {
         let doc = load_preview(&temp_file("long.txt", "x\n".repeat(10).as_bytes()));
 
-        assert_eq!(plain(&doc.line(0)), "  1 x");
-        assert_eq!(plain(&doc.line(10)), " 11 ");
-        assert_eq!(doc.wrap_indent, 4);
+        assert_eq!(plain(&doc.line(0)), "  1  x");
+        assert_eq!(plain(&doc.line(10)), " 11  ");
+        assert_eq!(doc.wrap_indent, 5);
     }
 
     #[test]

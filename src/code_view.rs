@@ -742,10 +742,11 @@ impl CodeView {
         let content = self.content;
         let indent = self.indent();
         let blank_gutter_width = if self.wrapped {
-            indent
+            indent.saturating_sub(1)
         } else {
             self.doc
                 .wrap_indent
+                .saturating_sub(1)
                 .saturating_sub(self.scroll_x)
                 .min(content.width as usize)
         } as u16;
@@ -770,7 +771,10 @@ impl CodeView {
             let mut cells: Vec<(char, Style, Option<usize>)> = Vec::new();
             if v.continuation {
                 let gutter = self.doc.rows[v.row].gutter_style();
-                cells.extend((0..indent).map(|_| (' ', gutter, None)));
+                cells.extend((0..indent).map(|x| {
+                    let style = if x + 1 == indent { *base } else { gutter };
+                    (' ', style, None)
+                }));
                 cells.extend((v.start..v.end).map(|i| (chars[i].0, chars[i].1, Some(i))));
             } else {
                 cells.extend((0..v.end).map(|i| (chars[i].0, chars[i].1, Some(i))));
@@ -955,16 +959,15 @@ mod tests {
             buffer[(1, 0)].fg,
             "keyword cells differ from gutter cells"
         );
-        assert!((0..gutter).all(|x| buffer[(x, 0)].bg != row_bg));
-        assert!((gutter..gutter + 3).all(|x| buffer[(x, 0)].bg == row_bg));
+        assert!((0..gutter - 1).all(|x| buffer[(x, 0)].bg != row_bg));
+        assert!((gutter - 1..gutter + 3).all(|x| buffer[(x, 0)].bg == row_bg));
 
         draw(&mut view, 4, 2);
         view.scroll_to(gutter as usize - 1, 0);
         let buffer = draw(&mut view, 4, 2);
         assert_eq!(line(&buffer, 0), " def");
         assert_eq!(buffer[(1, 0)].fg, keyword);
-        assert_ne!(buffer[(0, 0)].bg, row_bg);
-        assert!((1..4).all(|x| buffer[(x, 0)].bg == row_bg));
+        assert!((0..4).all(|x| buffer[(x, 0)].bg == row_bg));
     }
 
     #[test]
@@ -988,11 +991,12 @@ mod tests {
             let buffer = draw(&mut view, gutter + 10, 5);
             for y in 2..5 {
                 assert_eq!(line(&buffer, y).trim(), "");
-                for x in 0..gutter {
+                for x in 0..gutter - 1 {
                     assert_eq!(buffer[(x, y)].bg, buffer[(0, 0)].bg);
                     assert_ne!(buffer[(x, y)].bg, buffer[(0, 1)].bg);
                 }
                 assert_ne!(buffer[(0, y)].bg, buffer[(gutter, y)].bg);
+                assert_eq!(buffer[(gutter - 1, y)].bg, buffer[(gutter, y)].bg);
             }
         }
     }
@@ -1006,10 +1010,10 @@ mod tests {
         draw(&mut view, gutter + 10, 5);
         view.scroll_to(4, 0);
         let buffer = draw(&mut view, gutter + 10, 5);
-        for x in 0..gutter - 4 {
+        for x in 0..gutter - 5 {
             assert_eq!(buffer[(x, 2)].bg, buffer[(0, 0)].bg);
         }
-        assert_ne!(buffer[(gutter - 4, 2)].bg, buffer[(0, 0)].bg);
+        assert_ne!(buffer[(gutter - 5, 2)].bg, buffer[(0, 0)].bg);
 
         view.scroll_to(gutter as usize, 0);
         let buffer = draw(&mut view, gutter + 10, 5);
@@ -1414,12 +1418,16 @@ mod tests {
                 format!("{}mnopqr", " ".repeat(gutter as usize))
             );
             for y in 0..3 {
-                for x in 0..gutter {
+                for x in 0..gutter - 1 {
                     assert_eq!(buffer[(x, y)].bg, buffer[(0, 0)].bg);
                     assert_eq!(buffer[(x, y)].fg, buffer[(0, 0)].fg);
                 }
                 assert_ne!(buffer[(0, y)].bg, buffer[(gutter, y)].bg);
                 assert_ne!(buffer[(0, y)].fg, buffer[(gutter, y)].fg);
+                assert_eq!(buffer[(gutter - 2, y)].symbol(), " ");
+                assert_eq!(buffer[(gutter - 2, y)].bg, buffer[(0, y)].bg);
+                assert_eq!(buffer[(gutter - 1, y)].symbol(), " ");
+                assert_eq!(buffer[(gutter - 1, y)].bg, buffer[(gutter, y)].bg);
             }
             assert_eq!(
                 select(&mut view, (gutter, 0), (gutter + 6, 2)).as_deref(),

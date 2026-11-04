@@ -11,7 +11,7 @@ use ratatui::style::Modifier;
 /// First column of the diff pane (sidebar plus splitter).
 const PANE_X: u16 = 31;
 /// Width of the diff gutter for documents under 10,000 lines.
-const GUTTER: u16 = 12;
+const GUTTER: u16 = 13;
 
 /// A one-hunk patch of `lines` where the rows at `changes` are additions.
 fn patch(lines: &[String], changes: &[usize]) -> String {
@@ -142,7 +142,7 @@ fn completed_text_selection_is_copied_to_clipboard() {
     harness.drag_to((start + 4, 3));
     harness.drag_to((5, 3));
     harness.mouse_up((5, 3));
-    assert_eq!(harness.copied, ["selected", "     1    1 "]);
+    assert_eq!(harness.copied, ["selected", "     1    1  "]);
 }
 
 #[test]
