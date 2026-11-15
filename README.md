@@ -79,9 +79,11 @@ the matching line. Press `h`, `?`, or `F1` for the keyboard shortcuts.
 
 ## External editor
 
-Open a file in any tab and press `e` to edit it in `nano`.
+Open a file in any tab and press `e` to edit it externally.
 Gitplume hands over the whole terminal and returns when the editor exits,
-then reloads the diff or preview. Set `GITPLUME_EDITOR` to choose a different command:
+then reloads the diff or preview. It uses the same editor as Git
+(`git var GIT_EDITOR`: `GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`),
+falling back to `nano`. Set `GITPLUME_EDITOR` to override it for gitplume only:
 
 ```bash
 GITPLUME_EDITOR='nvim' gitplume

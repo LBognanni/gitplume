@@ -192,6 +192,9 @@ impl GitApi for FakeGit {
     fn git_dirs(&self, root: &Path) -> Result<(PathBuf, PathBuf), GitError> {
         Ok((root.join(".git"), root.join(".git")))
     }
+    fn editor(&self, _: &Path) -> Result<String, GitError> {
+        Ok("nano".into())
+    }
 }
 
 pub struct Harness {

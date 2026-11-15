@@ -1,8 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -174,6 +174,20 @@ struct Workers {
     files: Sender<Job>,
     preview: Sender<Job>,
     grep: Sender<Job>,
+    /// Git's editor command, filled in by a startup thread.
+    git_editor: Arc<OnceLock<String>>,
+}
+
+/// Ask Git for its editor in the background so startup never waits on it.
+fn spawn_git_editor(git: Arc<dyn GitApi>, root: PathBuf) -> Arc<OnceLock<String>> {
+    let editor = Arc::new(OnceLock::new());
+    let cell = editor.clone();
+    thread::spawn(move || {
+        if let Ok(value) = git.editor(&root) {
+            let _ = cell.set(value);
+        }
+    });
+    editor
 }
 
 pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -> io::Result<()> {
@@ -186,7 +200,8 @@ pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -
         commit_files: spawn_latest(git.clone(), tx.clone()),
         files: spawn_latest(git.clone(), tx.clone()),
         preview: spawn_latest(git.clone(), tx.clone()),
-        grep: spawn_latest(git, tx),
+        grep: spawn_latest(git.clone(), tx),
+        git_editor: spawn_git_editor(git, app.root.clone()),
     };
     terminal.draw(|frame| ui::render(&mut app, frame))?;
     if execute(app.start(), &jobs, &mut app, terminal)? {
@@ -254,7 +269,12 @@ fn execute(
         match effect {
             Effect::Quit => return Ok(true),
             Effect::Edit(path) => {
-                let result = crate::editor::open(terminal, &path, &app.cwd)?;
+                let result = crate::editor::open(
+                    terminal,
+                    &path,
+                    &app.cwd,
+                    jobs.git_editor.get().map(String::as_str),
+                )?;
                 let effects = app.update(Event::EditorClosed(result));
                 if execute(effects, jobs, app, terminal)? {
                     return Ok(true);

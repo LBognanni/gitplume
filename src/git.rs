@@ -118,6 +118,8 @@ pub trait GitApi: Send + Sync {
     fn restore(&self, root: &Path, paths: &[&str]) -> Result<(), GitError>;
     fn clean(&self, root: &Path, paths: &[&str]) -> Result<(), GitError>;
     fn git_dirs(&self, root: &Path) -> Result<(PathBuf, PathBuf), GitError>;
+    /// The editor command Git itself would launch from `root`.
+    fn editor(&self, root: &Path) -> Result<String, GitError>;
 }
 
 /// `GitApi` backed by Git's command line through a `Runner`.
@@ -406,6 +408,11 @@ impl<R: Runner> GitApi for CliGit<R> {
                 "Unexpected rev-parse output: {output:?}"
             ))),
         }
+    }
+
+    fn editor(&self, root: &Path) -> Result<String, GitError> {
+        let output = self.run(root, &["var", "GIT_EDITOR"])?;
+        Ok(output.trim_end().to_string())
     }
 }
 
@@ -1542,6 +1549,17 @@ mod tests {
                 &["rev-parse", "--show-toplevel"],
                 &[0]
             )]
+        );
+    }
+
+    #[test]
+    fn editor_asks_git_for_its_resolved_editor_in_the_repository() {
+        let git = replying("subl --wait\n");
+
+        assert_eq!(git.editor(root()).unwrap(), "subl --wait");
+        assert_eq!(
+            calls(&git),
+            [call("/repository", &["var", "GIT_EDITOR"], &[0])]
         );
     }
 }
