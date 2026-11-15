@@ -3,6 +3,7 @@ mod common;
 use common::{Harness, TempDir};
 use crossterm::event::{KeyCode, KeyModifiers};
 use gitplume::app::{Effect, Event, Focus};
+use gitplume::model::GrepMatch;
 use std::path::PathBuf;
 
 /// Capture external editor requests rather than launching an interactive process.
@@ -27,7 +28,7 @@ fn request(harness: &mut Harness) -> Vec<PathBuf> {
 }
 
 #[test]
-fn lowercase_e_edits_the_open_file_only_on_the_files_tab() {
+fn lowercase_e_edits_the_open_file_on_the_files_tab() {
     let dir = TempDir::new("editor-shortcut");
     let cwd = dir.0.join("subdir");
     std::fs::create_dir(&cwd).unwrap();
@@ -56,10 +57,56 @@ fn lowercase_e_edits_the_open_file_only_on_the_files_tab() {
     harness.press(KeyCode::Esc);
     harness.press(KeyCode::Char('1'));
     assert!(request(&mut harness).is_empty());
+}
+
+#[test]
+fn lowercase_e_edits_the_selected_change_and_reloads_its_diff() {
+    let dir = TempDir::new("editor-changes");
+    let mut status = common::state(&[], &["src/lib.rs"]);
+    status.root = dir.0.clone();
+    let mut harness = Harness::launched(&dir.0, &dir.0, &[]);
+    *harness.git.status.lock().unwrap() = Ok(status);
+    harness.press(KeyCode::Char('r'));
+    assert!(request(&mut harness).is_empty());
+
+    harness.press(KeyCode::Enter);
+    assert!(harness.screen().contains("src/lib.rs"));
+    assert_eq!(request(&mut harness), [dir.0.join("src/lib.rs")]);
+
+    harness.git.diffs.lock().unwrap().insert(
+        "src/lib.rs".into(),
+        Ok("@@ -1 +1 @@\n-old line\n+edited line\n".into()),
+    );
+    harness.send(Event::EditorClosed(Ok(())));
+    assert!(harness.screen().contains("edited line"));
+}
+
+#[test]
+fn lowercase_e_edits_the_find_preview() {
+    let dir = TempDir::new("editor-find");
+    std::fs::write(dir.0.join("notes.txt"), "needle here").unwrap();
+    let mut harness = Harness::launched(&dir.0, &dir.0, &["notes.txt"]);
+    harness.git.grep_matches.lock().unwrap().push(GrepMatch {
+        path: "notes.txt".into(),
+        line: 1,
+        text: "needle here".into(),
+    });
     harness.press(KeyCode::Char('3'));
     harness.press(KeyCode::Tab);
     harness.press(KeyCode::Tab);
     assert!(request(&mut harness).is_empty());
+
+    harness.press_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    for c in "needle".chars() {
+        harness.press(KeyCode::Char(c));
+    }
+    harness.click(harness.at("notes.txt:1"));
+    assert!(harness.screen().contains("needle here"));
+    assert_eq!(request(&mut harness), [dir.0.join("notes.txt")]);
+
+    std::fs::write(dir.0.join("notes.txt"), "needle edited").unwrap();
+    harness.send(Event::EditorClosed(Ok(())));
+    assert!(harness.screen().contains("needle edited"));
 }
 
 #[test]

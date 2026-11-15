@@ -31,7 +31,7 @@ Navigation
   Ctrl+F      Find in files
 
 File actions
-  e           Edit the open file externally (Files tab)
+  e           Edit the open file externally
   Space       Check or uncheck a file
   s           Stage or unstage the focused file
   d           Discard the focused unstaged file

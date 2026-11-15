@@ -61,7 +61,7 @@ the matching line. Press `h`, `?`, or `F1` for the keyboard shortcuts.
 | `1` / `2` / `3` or click a tab | Switch to the Changes / Files / Find tab |
 | `n` / `p` or click `↓` / `↑` above the diff | Next / previous change |
 | `t` | Jump to a file by name (Files tab) |
-| `e` | Edit the open file in an external editor (Files tab only) |
+| `e` | Edit the open file in an external editor |
 | Ctrl+F | Find in files |
 | Space or click `[ ]` | Check or uncheck a file for a bulk action |
 | `s` | Stage or unstage the focused file |
@@ -79,9 +79,9 @@ the matching line. Press `h`, `?`, or `F1` for the keyboard shortcuts.
 
 ## External editor
 
-In the Files tab, open a file and press `e` to edit it in `nano`.
+Open a file in any tab and press `e` to edit it in `nano`.
 Gitplume hands over the whole terminal and returns when the editor exits,
-then reloads the preview. Set `GITPLUME_EDITOR` to choose a different command:
+then reloads the diff or preview. Set `GITPLUME_EDITOR` to choose a different command:
 
 ```bash
 GITPLUME_EDITOR='nvim' gitplume

@@ -1327,6 +1327,23 @@ impl App {
         Vec::new()
     }
 
+    /// The file `e` opens externally: the working-tree file of the selected
+    /// status entry on Changes, or the previewed file on Files and Find.
+    fn edit_target(&self) -> Option<PathBuf> {
+        match self.tab {
+            Tab::Changes if !self.diff_loading => match &self.selection {
+                Some(DiffEntry::File(file)) if file.status != 'D' => {
+                    Some(self.root.join(&file.path))
+                }
+                _ => None,
+            },
+            Tab::Files | Tab::Find if !self.preview_loading && !self.files_tree_loading => {
+                self.preview_path.clone()
+            }
+            _ => None,
+        }
+    }
+
     /// Select a status entry for the diff pane and load its diff.
     fn select(&mut self, entry: FileEntry) -> Vec<Effect> {
         self.request_diff(DiffEntry::File(entry))
@@ -1470,16 +1487,19 @@ impl App {
                 if let Err(error) = result {
                     self.notify(Some("Could not edit file"), &error, Severity::Error);
                 }
-                let Some(path) = self.preview_path.clone() else {
+                let Some(path) = self.edit_target() else {
                     return Vec::new();
                 };
-                self.preview_token += 1;
-                self.preview_loading = true;
-                let mut effects = vec![Effect::Git(Job::Preview {
-                    path: path.clone(),
-                    token: self.preview_token,
-                })];
-                effects.extend(self.refresh_files_quiet());
+                let mut effects = Vec::new();
+                if self.tab != Tab::Changes {
+                    self.preview_token += 1;
+                    self.preview_loading = true;
+                    effects.push(Effect::Git(Job::Preview {
+                        path: path.clone(),
+                        token: self.preview_token,
+                    }));
+                    effects.extend(self.refresh_files_quiet());
+                }
                 self.merge_pending(Invalidation {
                     status: true,
                     changed_paths: [path
@@ -1491,6 +1511,7 @@ impl App {
                     .collect(),
                     ..Invalidation::default()
                 });
+                effects.extend(self.start_auto_read());
                 return effects;
             }
             Event::Input(Input::Key(key)) if key.kind != KeyEventKind::Release => {
@@ -1949,18 +1970,10 @@ impl App {
         }
         match key.code {
             KeyCode::Char('e')
-                if self.tab == Tab::Files
-                    && !self.preview_loading
-                    && !self.files_tree_loading
-                    && key.kind == KeyEventKind::Press
+                if key.kind == KeyEventKind::Press
                     && (key.modifiers - KeyModifiers::SHIFT).is_empty() =>
             {
-                return self
-                    .preview_path
-                    .clone()
-                    .map(Effect::Edit)
-                    .into_iter()
-                    .collect();
+                return self.edit_target().map(Effect::Edit).into_iter().collect();
             }
             KeyCode::Char('q') => return vec![Effect::Quit],
             KeyCode::Char('r') => return self.refresh_all(),

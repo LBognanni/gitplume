@@ -209,7 +209,7 @@ fn shortcut_popup_opens_on_first_launch_and_with_h() {
     let screen = harness.screen();
     assert!(screen.contains("Mouse controls are supported throughout."));
     assert!(screen.contains("s           Stage or unstage"));
-    assert!(screen.contains("e           Edit the open file externally (Files tab)"));
+    assert!(screen.contains("e           Edit the open file externally"));
 
     harness.press(KeyCode::Char('h'));
     assert!(!shortcuts_open(&harness));
