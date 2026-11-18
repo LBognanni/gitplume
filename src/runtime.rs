@@ -6,7 +6,10 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ratatui::DefaultTerminal;
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+use crossterm::{execute, queue};
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 use crate::app::{Action, App, Effect, Event, Job};
 use crate::document::{diff_document, load_preview};
@@ -14,6 +17,24 @@ use crate::git::{GitApi, GitError};
 use crate::model::{DiffEntry, FileEntry};
 use crate::ui;
 use crate::watcher;
+
+/// The terminal, buffered so each frame reaches the pty in one write.
+pub type Tui = Terminal<CrosstermBackend<io::BufWriter<io::Stdout>>>;
+
+/// A terminal whose output buffer holds a whole frame.
+pub fn terminal() -> io::Result<Tui> {
+    Terminal::new(CrosstermBackend::new(io::BufWriter::with_capacity(
+        1 << 18,
+        io::stdout(),
+    )))
+}
+
+/// Draw one frame as a synchronized update so it never shows half-painted.
+fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
+    queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+    terminal.draw(|frame| ui::render(app, frame))?;
+    execute!(terminal.backend_mut(), EndSynchronizedUpdate)
+}
 
 /// The platform location of the first-launch marker, if one can be determined.
 pub fn default_marker() -> Option<PathBuf> {
@@ -190,7 +211,7 @@ fn spawn_git_editor(git: Arc<dyn GitApi>, root: PathBuf) -> Arc<OnceLock<String>
     editor
 }
 
-pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -> io::Result<()> {
+pub fn run(terminal: &mut Tui, git: Arc<dyn GitApi>, mut app: App) -> io::Result<()> {
     let (tx, rx) = mpsc::channel();
     watcher::spawn(git.clone(), app.root.clone(), tx.clone());
     let jobs = Workers {
@@ -203,7 +224,7 @@ pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -
         grep: spawn_latest(git.clone(), tx),
         git_editor: spawn_git_editor(git, app.root.clone()),
     };
-    terminal.draw(|frame| ui::render(&mut app, frame))?;
+    draw(terminal, &mut app)?;
     if execute(app.start(), &jobs, &mut app, terminal)? {
         return Ok(());
     }
@@ -236,7 +257,7 @@ pub fn run(terminal: &mut DefaultTerminal, git: Arc<dyn GitApi>, mut app: App) -
         if apply(&mut app, first, &rx, &jobs, terminal)? {
             return Ok(());
         }
-        terminal.draw(|frame| ui::render(&mut app, frame))?;
+        draw(terminal, &mut app)?;
     }
 }
 
@@ -246,7 +267,7 @@ fn apply(
     first: Event,
     rx: &Receiver<Event>,
     jobs: &Workers,
-    terminal: &mut DefaultTerminal,
+    terminal: &mut Tui,
 ) -> io::Result<bool> {
     for event in std::iter::once(first).chain(rx.try_iter()) {
         if execute(app.update(event), jobs, app, terminal)? {
@@ -263,7 +284,7 @@ fn execute(
     effects: Vec<Effect>,
     jobs: &Workers,
     app: &mut App,
-    terminal: &mut DefaultTerminal,
+    terminal: &mut Tui,
 ) -> io::Result<bool> {
     for effect in effects {
         match effect {

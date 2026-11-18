@@ -11,7 +11,8 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::DefaultTerminal;
+
+use crate::runtime::Tui;
 
 // A cooked terminal sends Ctrl+C to both processes in the foreground group.
 // Let the editor handle it without terminating gitplume before it restores the UI.
@@ -65,7 +66,7 @@ fn command(source: &str, editor: &str, path: &Path, cwd: &Path) -> Result<Comman
 /// Open `path` in the editor; `git_editor` is Git's editor, once known.
 /// Terminal errors are fatal; editor failures are returned for an in-app toast.
 pub fn open(
-    terminal: &mut DefaultTerminal,
+    terminal: &mut Tui,
     path: &Path,
     cwd: &Path,
     git_editor: Option<&str>,

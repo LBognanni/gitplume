@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
+use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use gitplume::app::App;
 use gitplume::git::{CliGit, SystemRunner};
 use gitplume::runtime;
@@ -25,14 +26,16 @@ fn main() -> io::Result<ExitCode> {
     let show_shortcuts = runtime::default_marker().is_none_or(|m| runtime::claim_first_launch(&m));
     let app = App::new(root, cwd, show_shortcuts);
 
-    let mut terminal = ratatui::init();
     let restore = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = execute!(io::stdout(), DisableMouseCapture);
+        ratatui::restore();
         restore(info);
     }));
-    let result = execute!(io::stdout(), EnableMouseCapture)
-        .and_then(|()| runtime::run(&mut terminal, Arc::new(git), app));
+    enable_raw_mode()?;
+    let result = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
+        .and_then(|()| runtime::terminal())
+        .and_then(|mut terminal| runtime::run(&mut terminal, Arc::new(git), app));
     let _ = execute!(io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result.map(|()| ExitCode::SUCCESS)
