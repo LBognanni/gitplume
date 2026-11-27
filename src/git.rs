@@ -98,6 +98,10 @@ impl Runner for SystemRunner {
 pub trait GitApi: Send + Sync {
     fn status(&self, root: &Path) -> Result<RepoState, GitError>;
     fn files(&self, cwd: &Path) -> Result<Vec<String>, GitError>;
+    /// Ignored paths under `cwd`; a wholly ignored folder is one `name/` entry.
+    fn ignored(&self, cwd: &Path) -> Result<Vec<String>, GitError>;
+    /// The entries directly inside `dir`, sorted, with folders as `name/`.
+    fn list_dir(&self, dir: &Path) -> Result<Vec<String>, GitError>;
     fn commits(&self, root: &Path) -> Result<Vec<Commit>, GitError>;
     fn commit_files(&self, root: &Path, commit: &Commit) -> Result<Vec<CommitFile>, GitError>;
     fn diff(&self, root: &Path, entry: &DiffEntry) -> Result<String, GitError>;
@@ -130,6 +134,23 @@ pub struct CliGit<R: Runner> {
 impl<R: Runner> CliGit<R> {
     pub fn new(runner: R) -> Self {
         Self { runner }
+    }
+
+    /// Sorted `ls-files` paths under `cwd`, selected by `options`.
+    fn ls_files(&self, cwd: &Path, options: &[&str]) -> Result<Vec<String>, GitError> {
+        let args: Vec<&str> = ["ls-files", "-z"]
+            .into_iter()
+            .chain(options.iter().copied())
+            .chain(["--", "."])
+            .collect();
+        let output = self.run(cwd, &args)?;
+        let mut files: Vec<String> = output
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect();
+        files.sort();
+        Ok(files)
     }
 
     fn run(&self, cwd: &Path, args: &[&str]) -> Result<String, GitError> {
@@ -256,25 +277,29 @@ impl<R: Runner> GitApi for CliGit<R> {
     }
 
     fn files(&self, cwd: &Path) -> Result<Vec<String>, GitError> {
-        let output = self.run(
+        self.ls_files(cwd, &["--cached", "--others", "--exclude-standard"])
+    }
+
+    fn ignored(&self, cwd: &Path) -> Result<Vec<String>, GitError> {
+        self.ls_files(
             cwd,
-            &[
-                "ls-files",
-                "-z",
-                "--cached",
-                "--others",
-                "--exclude-standard",
-                "--",
-                ".",
-            ],
-        )?;
-        let mut files: Vec<String> = output
-            .split('\0')
-            .filter(|path| !path.is_empty())
-            .map(str::to_string)
-            .collect();
-        files.sort();
-        Ok(files)
+            &["--others", "--ignored", "--exclude-standard", "--directory"],
+        )
+    }
+
+    fn list_dir(&self, dir: &Path) -> Result<Vec<String>, GitError> {
+        let error = |error: std::io::Error| GitError::Other(error.to_string());
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(dir).map_err(error)? {
+            let entry = entry.map_err(error)?;
+            let mut name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().map_err(error)?.is_dir() {
+                name.push('/');
+            }
+            names.push(name);
+        }
+        names.sort();
+        Ok(names)
     }
 
     fn commits(&self, root: &Path) -> Result<Vec<Commit>, GitError> {
@@ -1110,6 +1135,47 @@ mod tests {
                 &[0],
             )]
         );
+    }
+
+    #[test]
+    fn ignored_requests_scoped_ignored_paths_with_folders_collapsed() {
+        let git = replying("node_modules/\0debug.log\0");
+
+        let cwd = Path::new("/repository/subdirectory");
+        assert_eq!(git.ignored(cwd).unwrap(), ["debug.log", "node_modules/"]);
+        assert_eq!(
+            calls(&git),
+            [call(
+                "/repository/subdirectory",
+                &[
+                    "ls-files",
+                    "-z",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "--directory",
+                    "--",
+                    "."
+                ],
+                &[0],
+            )]
+        );
+    }
+
+    #[test]
+    fn list_dir_lists_one_level_with_folders_marked() {
+        let dir = std::env::temp_dir().join(format!("gitplume-list-dir-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("b-folder/nested")).unwrap();
+        std::fs::write(dir.join("c-file.js"), "").unwrap();
+        std::fs::write(dir.join("a-file.js"), "").unwrap();
+        let git = replying("");
+
+        let listed = git.list_dir(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(listed.unwrap(), ["a-file.js", "b-folder/", "c-file.js"]);
+        assert!(calls(&git).is_empty());
+        assert!(git.list_dir(&dir).is_err());
     }
 
     #[test]

@@ -63,6 +63,10 @@ pub struct FakeGit {
     pub commit_files: Mutex<HashMap<String, Vec<CommitFile>>>,
     /// Paths listed by `files`, relative to the launch directory.
     pub files: Mutex<Result<Vec<String>, GitError>>,
+    /// Paths listed by `ignored`; wholly ignored folders end in `/`.
+    pub ignored: Mutex<Vec<String>>,
+    /// Entries per absolute folder path served by `list_dir`; folders end in `/`.
+    pub dirs: Mutex<HashMap<PathBuf, Vec<String>>>,
     /// The full set of matches `grep` filters by path and query.
     pub grep_matches: Mutex<Vec<GrepMatch>>,
     /// When set, every `grep` call fails with this error.
@@ -80,6 +84,8 @@ impl FakeGit {
             commits: Mutex::new(Ok(Vec::new())),
             commit_files: Mutex::new(HashMap::new()),
             files: Mutex::new(Ok(Vec::new())),
+            ignored: Mutex::new(Vec::new()),
+            dirs: Mutex::new(HashMap::new()),
             grep_matches: Mutex::new(Vec::new()),
             grep_error: Mutex::new(None),
             calls: Mutex::new(Vec::new()),
@@ -136,6 +142,16 @@ impl GitApi for FakeGit {
     fn files(&self, cwd: &Path) -> Result<Vec<String>, GitError> {
         self.record(format!("files {}", cwd.display()));
         self.files.lock().unwrap().clone()
+    }
+    fn ignored(&self, _: &Path) -> Result<Vec<String>, GitError> {
+        Ok(self.ignored.lock().unwrap().clone())
+    }
+    fn list_dir(&self, dir: &Path) -> Result<Vec<String>, GitError> {
+        self.record(format!("list_dir {}", dir.display()));
+        let dirs = self.dirs.lock().unwrap();
+        dirs.get(dir)
+            .cloned()
+            .ok_or_else(|| GitError::Other("No such file or directory".into()))
     }
     fn grep(
         &self,

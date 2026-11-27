@@ -650,6 +650,11 @@ fn file_rows(app: &mut App, area: Rect, buf: &mut Buffer) {
             } else {
                 icons::file_label(&node.name)
             };
+            if node.ignored {
+                for span in &mut line.spans {
+                    span.style = span.style.fg(theme::IGNORED_TEXT);
+                }
+            }
             line.spans.insert(
                 0,
                 Span::styled(guides[index].clone(), Style::new().fg(theme::BORDER)),

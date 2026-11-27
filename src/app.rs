@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -370,6 +370,24 @@ pub struct FileNode {
     pub depth: usize,
     pub dir: bool,
     pub expanded: bool,
+    /// Ignored by Git; shown grayed out and kept out of search.
+    pub ignored: bool,
+    /// An ignored folder whose entries were requested; they load on expand.
+    pub listed: bool,
+}
+
+impl FileNode {
+    fn new(name: String, path: String, depth: usize, dir: bool, ignored: bool) -> Self {
+        Self {
+            name,
+            path,
+            depth,
+            dir,
+            expanded: false,
+            ignored,
+            listed: false,
+        }
+    }
 }
 
 /// The Files tree: the launch directory with nested folders and files.
@@ -387,53 +405,52 @@ pub struct FileTree {
 }
 
 impl FileTree {
-    /// Build the tree under `root_name` from `/`-separated `files`:
-    /// subdirectories first, then files, each sorted.
-    fn build(root_name: String, files: &[String]) -> Self {
+    /// Build the tree under `root_name` from `/`-separated `files` and
+    /// `ignored` paths (folders end in `/`): subdirectories first, then
+    /// files, each sorted.
+    fn build(root_name: String, files: &[String], ignored: &[String]) -> Self {
         #[derive(Default)]
         struct Dir {
+            ignored: bool,
             dirs: std::collections::BTreeMap<String, Dir>,
-            files: Vec<String>,
+            files: Vec<(String, bool)>,
         }
         let mut top = Dir::default();
-        for file in files {
-            let mut parts: Vec<&str> = file.split('/').collect();
+        let paths = files.iter().map(|path| (path, false));
+        for (path, is_ignored) in paths.chain(ignored.iter().map(|path| (path, true))) {
+            let mut parts: Vec<&str> = path.split('/').collect();
             let name = parts.pop().unwrap_or_default();
             let dir = parts.into_iter().fold(&mut top, |dir, part| {
                 dir.dirs.entry(part.to_string()).or_default()
             });
-            dir.files.push(name.to_string());
+            if name.is_empty() {
+                dir.ignored = true;
+            } else {
+                dir.files.push((name.to_string(), is_ignored));
+            }
         }
         fn flatten(dir: Dir, prefix: &str, depth: usize, nodes: &mut Vec<FileNode>) {
             for (name, child) in dir.dirs {
                 let path = format!("{prefix}{name}");
-                nodes.push(FileNode {
+                nodes.push(FileNode::new(
                     name,
-                    path: path.clone(),
+                    path.clone(),
                     depth,
-                    dir: true,
-                    expanded: false,
-                });
+                    true,
+                    child.ignored,
+                ));
                 flatten(child, &format!("{path}/"), depth + 1, nodes);
             }
             let mut files = dir.files;
             files.sort();
-            for name in files {
-                nodes.push(FileNode {
-                    path: format!("{prefix}{name}"),
-                    name,
-                    depth,
-                    dir: false,
-                    expanded: false,
-                });
+            for (name, ignored) in files {
+                let path = format!("{prefix}{name}");
+                nodes.push(FileNode::new(name, path, depth, false, ignored));
             }
         }
         let mut nodes = vec![FileNode {
-            name: root_name,
-            path: String::new(),
-            depth: 0,
-            dir: true,
             expanded: true,
+            ..FileNode::new(root_name, String::new(), 0, true, false)
         }];
         flatten(top, "", 1, &mut nodes);
         Self {
@@ -443,10 +460,87 @@ impl FileTree {
         }
     }
 
+    /// The range of node indices below node `index` in the tree.
+    fn descendants(&self, index: usize) -> std::ops::Range<usize> {
+        let depth = self.nodes[index].depth;
+        let end = self.nodes[index + 1..]
+            .iter()
+            .position(|node| node.depth <= depth)
+            .map_or(self.nodes.len(), |offset| index + 1 + offset);
+        index + 1..end
+    }
+
+    /// Insert `children`, already in tree order, below node `index`,
+    /// keeping the cursor on its node.
+    fn insert_children(&mut self, index: usize, children: Vec<FileNode>) {
+        if self.cursor.is_some_and(|cursor| cursor > index) {
+            self.cursor = self.cursor.map(|cursor| cursor + children.len());
+        }
+        self.nodes.splice(index + 1..index + 1, children);
+    }
+
+    /// Expand or collapse folder `index` (not the root). Expanding an unlisted
+    /// ignored folder requests its entries; collapsing one drops them, so the
+    /// next expand shows fresh contents.
+    fn set_expanded(&mut self, index: usize, expanded: bool, cwd: &Path) -> Vec<Effect> {
+        let node = &mut self.nodes[index];
+        if index == 0 || !node.dir {
+            return Vec::new();
+        }
+        node.expanded = expanded;
+        if !node.ignored || node.listed == expanded {
+            return Vec::new();
+        }
+        node.listed = expanded;
+        if expanded {
+            return vec![Effect::Git(Job::ListDir {
+                path: node.path.clone(),
+                dir: cwd.join(&node.path),
+            })];
+        }
+        let range = self.descendants(index);
+        let removed = range.len();
+        self.nodes.drain(range);
+        self.cursor = self.cursor.map(|cursor| match cursor {
+            cursor if cursor <= index => cursor,
+            cursor if cursor <= index + removed => index,
+            cursor => cursor - removed,
+        });
+        Vec::new()
+    }
+
+    /// Show `entries` (folders end in `/`) below the listed ignored folder
+    /// at `path`, unless it was collapsed or already filled meanwhile.
+    fn fill(&mut self, path: &str, entries: Vec<String>) {
+        let Some(index) = self
+            .nodes
+            .iter()
+            .position(|node| node.dir && node.ignored && node.listed && node.path == path)
+        else {
+            return;
+        };
+        if !self.descendants(index).is_empty() {
+            return;
+        }
+        let depth = self.nodes[index].depth + 1;
+        let (dirs, files): (Vec<String>, Vec<String>) =
+            entries.into_iter().partition(|name| name.ends_with('/'));
+        let children = dirs
+            .into_iter()
+            .map(|name| (name.trim_end_matches('/').to_string(), true))
+            .chain(files.into_iter().map(|name| (name, false)))
+            .map(|(name, dir)| {
+                let path = format!("{path}/{name}");
+                FileNode::new(name, path, depth, dir, true)
+            })
+            .collect();
+        self.insert_children(index, children);
+    }
+
     /// Rebuild from a fresh file list, keeping expanded folders (by path)
     /// and the cursor (by path) so a background refresh doesn't visibly
     /// disturb the tree.
-    fn rebuild(&mut self, root_name: String, files: &[String]) {
+    fn rebuild(&mut self, root_name: String, files: &[String], ignored: &[String]) {
         let cursor_path = self.cursor.map(|index| self.nodes[index].path.clone());
         let following_cursor = self.followed
             == self
@@ -459,11 +553,27 @@ impl FileTree {
             .filter(|node| node.dir && node.expanded)
             .map(|node| node.path.as_str())
             .collect();
-        let mut rebuilt = Self::build(root_name, files);
+        let mut rebuilt = Self::build(root_name, files, ignored);
         for node in &mut rebuilt.nodes {
             if node.dir && expanded.contains(node.path.as_str()) {
                 node.expanded = true;
             }
+        }
+        // Listed ignored folders keep their loaded entries.
+        for index in (0..rebuilt.nodes.len()).rev() {
+            let node = &rebuilt.nodes[index];
+            if !(node.dir && node.ignored) || !rebuilt.descendants(index).is_empty() {
+                continue;
+            }
+            let Some(old) = self
+                .nodes
+                .iter()
+                .position(|old| old.dir && old.ignored && old.listed && old.path == node.path)
+            else {
+                continue;
+            };
+            rebuilt.nodes[index].listed = true;
+            rebuilt.insert_children(index, self.nodes[self.descendants(old)].to_vec());
         }
         rebuilt.cursor = cursor_path
             .and_then(|path| rebuilt.nodes.iter().position(|node| node.path == path))
@@ -614,6 +724,11 @@ pub enum Job {
         cwd: PathBuf,
         token: u64,
     },
+    /// List the ignored folder `dir` (node `path`); runs on the Git queue.
+    ListDir {
+        path: String,
+        dir: PathBuf,
+    },
     /// Read a file preview; runs on the latest-only preview worker.
     Preview {
         path: PathBuf,
@@ -663,9 +778,14 @@ pub enum Event {
         token: u64,
         result: Result<Vec<CommitFile>, GitError>,
     },
-    /// Files under the launch directory for request `token`.
+    /// Files and ignored paths under the launch directory for request `token`.
     Files {
         token: u64,
+        result: Result<(Vec<String>, Vec<String>), GitError>,
+    },
+    /// The entries of the ignored folder at node `path`.
+    Dir {
+        path: String,
         result: Result<Vec<String>, GitError>,
     },
     /// A preview document for request `token`.
@@ -901,8 +1021,8 @@ impl App {
         self.preview_view.set_document(Document::empty());
     }
 
-    fn apply_files(&mut self, files: Vec<String>) -> Vec<Effect> {
-        self.files = FileTree::build(self.cwd.display().to_string(), &files);
+    fn apply_files(&mut self, (files, ignored): (Vec<String>, Vec<String>)) -> Vec<Effect> {
+        self.files = FileTree::build(self.cwd.display().to_string(), &files, &ignored);
         self.search_index = Self::index_files(files);
         self.clear_preview();
         self.search(false)
@@ -911,8 +1031,9 @@ impl App {
     /// Apply a background file-list refresh: rebuild the tree in place
     /// (preserving its state) and refresh find-in-files, but leave the
     /// preview as it is.
-    fn apply_files_quiet(&mut self, files: Vec<String>) -> Vec<Effect> {
-        self.files.rebuild(self.cwd.display().to_string(), &files);
+    fn apply_files_quiet(&mut self, (files, ignored): (Vec<String>, Vec<String>)) -> Vec<Effect> {
+        self.files
+            .rebuild(self.cwd.display().to_string(), &files, &ignored);
         self.search_index = Self::index_files(files);
         self.search(true)
     }
@@ -933,12 +1054,10 @@ impl App {
         let Some(index) = self.files.cursor else {
             return Vec::new();
         };
-        let node = &mut self.files.nodes[index];
+        let node = &self.files.nodes[index];
         if node.dir {
-            if index > 0 {
-                node.expanded = !node.expanded;
-            }
-            return Vec::new();
+            let expanded = !node.expanded;
+            return self.files.set_expanded(index, expanded, &self.cwd);
         }
         let path = self.cwd.join(&node.path);
         self.preview_path = Some(path.clone());
@@ -1065,11 +1184,10 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.files.step(false),
             KeyCode::Enter => return self.activate_file_row(),
             KeyCode::Right | KeyCode::Left => {
-                if let Some(index) = self.files.cursor.filter(|&index| index > 0) {
-                    let node = &mut self.files.nodes[index];
-                    if node.dir {
-                        node.expanded = code == KeyCode::Right;
-                    }
+                if let Some(index) = self.files.cursor {
+                    return self
+                        .files
+                        .set_expanded(index, code == KeyCode::Right, &self.cwd);
                 }
             }
             _ => {}
@@ -1630,6 +1748,16 @@ impl App {
                     Err(error) => self.git_error("refresh files", &error),
                 }
             }
+            Event::Dir { path, result } => match result {
+                Ok(entries) => self.files.fill(&path, entries),
+                Err(error) => {
+                    if let Some(index) = self.files.nodes.iter().position(|node| node.path == path)
+                    {
+                        self.files.set_expanded(index, false, &self.cwd);
+                    }
+                    self.git_error("list folder", &error);
+                }
+            },
             Event::Preview { token, doc } => {
                 if token != self.preview_token {
                     return Vec::new();

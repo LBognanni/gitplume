@@ -15,6 +15,8 @@ pub const REMOVAL_BACKGROUND: Color = Color::from_u32(0x351b20);
 pub const DIFF_BACKGROUND: Color = Color::from_u32(0x272822);
 pub const GUTTER_BACKGROUND: Color = Color::from_u32(0x1a1d1d);
 pub const GUTTER_TEXT: Color = Color::from_u32(0x7d8590);
+/// Files and folders ignored by Git, grayed out in the Files tree.
+pub const IGNORED_TEXT: Color = GUTTER_TEXT;
 pub const ADDITION_GUTTER_BACKGROUND: Color = Color::from_u32(0x102019);
 pub const ADDITION_GUTTER_TEXT: Color = Color::from_u32(0x79a580);
 pub const REMOVAL_GUTTER_BACKGROUND: Color = Color::from_u32(0x25161b);

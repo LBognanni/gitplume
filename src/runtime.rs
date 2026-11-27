@@ -109,7 +109,13 @@ pub fn run_job(git: &dyn GitApi, job: Job) -> Event {
         },
         Job::Files { cwd, token } => Event::Files {
             token,
-            result: git.files(&cwd),
+            result: git
+                .files(&cwd)
+                .and_then(|files| Ok((files, git.ignored(&cwd)?))),
+        },
+        Job::ListDir { path, dir } => Event::Dir {
+            path,
+            result: git.list_dir(&dir),
         },
         Job::Preview { path, token } => Event::Preview {
             token,
